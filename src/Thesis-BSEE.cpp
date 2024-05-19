@@ -5,6 +5,17 @@
 #include <Wire.h>
 #include <SPI.h>
 #include <Adafruit_PWMServoDriver.h>
+#include "AccelStepper.h"
+
+#define DEBUG // Uncomment to enable debug printing
+
+#ifdef DEBUG
+#define debug_print(x) Serial.print(x)
+#define debug_println(x) Serial.println(x)
+#else
+#define debug_print(x)   // Empty statement
+#define debug_println(x) // Empty statement
+#endif
 
 //----------USER INTERFACE-------------------
 unsigned int reqPilinutsLevel = 17;
@@ -13,16 +24,31 @@ unsigned int reqSugarLevel = 17; // required sugar level
 
 //---------------------------------
 
+//-----------TIME MILLIS -----------------
+unsigned long currentMillis;
+unsigned long previousMillis = 0; // set up timer for whole machine
+const unsigned long interval = 20;
+
+unsigned long previousMachineMillis = 0;
+unsigned long previousInductionMedMillis = 0;
+unsigned long previousInductionLowMillis = 0;
+unsigned long previousStirringMillis = 0;
+//------------------------
+
+//--------------automation-------------
+int state = -1; // stage of automation
+//-------------------------------
+
 //----------MACHINE PROCESS STATUS------------------
 // this determines the current action of the machine
 enum Machine_process
 {
-  stop_process,     // This Halts all operations
-  presetup_process, // This starts the sensing of pili, sugar, and water
-  dispensing_process,
-  cooking_process,
-  cooling_process,
-  packaging_process,
+    stop_process,     // This Halts all operations
+    presetup_process, // This starts the sensing of pili, sugar, and water
+    dispensing_process,
+    cooking_process,
+    cooling_process,
+    packaging_process,
 };
 
 Machine_process machine_statusnow = stop_process;
@@ -47,19 +73,43 @@ uint32_t count = 0;
 unsigned int UltraS1();
 unsigned int UltraS2();
 void waterLevel();
-void machine_buttons();
+int machine_buttons();
 // int dispensing_specificprocess(int dispensing_switch);
 void water_dispensing();
 void sugarHopper_servo();
 void loadCell_servos();
+void panRotation();
 //-------------
 
-//---------FLAGS----------
+//--------- FLAGS-----------------------
 // make these false at stop
 bool waterPump_flag = false;
 bool sugarHopper_flag = false;
 bool loadCell_servos_flag = false;
+bool panRotation_flag = false;
+
+int stepFlagInduction_Med = 0; // On induction cooker to Medium temp
+int stepFlagInduction_Low = 0; // Adjust to Low Temp, then Off Induction cooker
+
+int stepFlagStirring = 0;   // stirring arm sequence
+int toggleFlagStirring = 0; // stirring arm toggle sequence. 1 means On, 0 means off
 //---------------------
+
+//-----------INDUCTION COOKER---------------
+int IndCooker_ONOFF = 7;
+int IndCooker_FUNC = 8;
+int IndCooker_negaTEMP = 9;
+int IndCooker_posiTEMP = 10;
+//--------------------------------
+
+//---------Stirrer Arm---------------
+int stirrer_up = 30;
+int stirrer_down = 31;
+int stirrer_cc = 32;
+int stirrer_cw = 33;
+// add EnA in pwm pin if using L298N motor driver
+
+//-----------------------------
 
 //-----------NO DELAY FUNCTIONS---------------------------
 int get_Loadcells(); // Must declare function before noDelay, function can not take arguments
@@ -77,16 +127,16 @@ double *distances;
 //-------------------WATER LEVEL-----------------------
 enum WaterLevelState
 {
-  IDLE,
-  POWER_ON,
-  READ_SENSOR,
-  POWER_OFF
+    IDLE,
+    POWER_ON,
+    READ_SENSOR,
+    POWER_OFF
 };
 // Define the pins
 const int WATER_LEVEL_POW = 40; // Power pin for water level sensor
 const int WATER_LEVEL_S = A0;   // Analog pin for water level sensor
 // Define variables
-WaterLevelState state = IDLE;
+WaterLevelState Waterstate = IDLE;
 unsigned long lastStateTime = 0;
 int water_level = 0;
 //-----------------WATER DISPENSING--------------------
@@ -113,395 +163,655 @@ const int IL_Running = 6;
 //---------------------------------------
 
 //---------------SERVO MOTORS---------------
-#define SERVOMIN 150  // This is the 'minimum' pulse length count (out of 4096)
-#define SERVOMAX 600  // This is the 'maximum' pulse length count (out of 4096)
+#define SERVOMIN 650  // This is the 'minimum' pulse length count (out of 4096)
+#define SERVOMAX 2350 // This is the 'maximum' pulse length count (out of 4096)
 #define SERVO_FREQ 50 // Analog servos run at ~50 Hz updates
 const byte sugarHopper = 0;
-const byte nutsHopper = 1;
+const byte nutsHopper = 4;
 const byte arm1LDcell = 2;
 const byte arm2LDcell = 3;
+
+float val_sugarHopper = 1500;
+float val_nutsHopper = 1500;
+float val_arm1LDcell = 1500;
+float val_arm2LDcell = 1500;
+
+float val_sugarHopperFiltered = 1500;
+float val_nutsHopperFiltered = 1500;
+float val_arm1LDcellFiltered = 1500;
+float val_arm2LDcellFiltered = 1500;
+
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+
+float filter(float prevValue, float currentValue, int filter)
+{
+    float lengthFiltered = (prevValue + (currentValue * filter)) / (filter + 1);
+    return lengthFiltered;
+}
+
 //----------------------------------------------
+
+//--------------STEPPER MOTORS-------------------
+const int stpprPANstep = 16;
+const int stpprPANdir = 17;
+#define motorInterfaceType 1
+const int targetPosition = 1000;
+const int defaultPosition = 0;
+AccelStepper kawaliStepper(motorInterfaceType, stpprPANstep, stpprPANdir);
+//-----------------------------
 
 void setup()
 {
-  Serial.begin(9600);
-  Serial.println(__FILE__);
-  Serial.print("LIBRARY VERSION: ");
-  Serial.println(HX711_LIB_VERSION);
-  Serial.println();
+#ifdef DEBUG
+    Serial.begin(9600); // Adjust baud rate as needed
+    debug_println("Debug mode enabled");
+    debug_println(__FILE__);
+    debug_println("LIBRARY VERSION: ");
+    debug_println(HX711_LIB_VERSION);
+    debug_println();
+#endif
 
-  for (int i = 0; i < 2; i++)
-  {
-    scales[i].begin(dataPin[i], clockPin);
-    scales[i].set_scale(calib[i]);
-    // reset the scale to zero = 0
-    scales[i].tare();
-  }
-  //-----------------------------------
-  delay(10);
-  //-----------ULTRASONIC-------------------
-  HCSR04.begin(triggerPin, echoPins, echoCount);
-  pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(10, OUTPUT); // TEST ONLY, REMOVE AFTER
-  //-------------------------------------
+    for (int i = 0; i < 2; i++)
+    {
+        scales[i].begin(dataPin[i], clockPin);
+        scales[i].set_scale(calib[i]);
+        // reset the scale to zero = 0
+        scales[i].tare();
+    }
+    //-----------------------------------
+    delay(10);
+    //-----------ULTRASONIC-------------------
+    HCSR04.begin(triggerPin, echoPins, echoCount);
+    pinMode(LED_BUILTIN, OUTPUT);
+    pinMode(10, OUTPUT); // TEST ONLY, REMOVE AFTER
+    //-------------------------------------
 
-  //-----------Water Level------------
-  pinMode(WATER_LEVEL_POW, OUTPUT);
-  digitalWrite(WATER_LEVEL_POW, LOW);
-  //-----------WATER DISPENSING---------------
-  pinMode(WaterPump, OUTPUT);
-  //---------------
+    //------------Induction Cooker--------------
+    // these are relays that act as pulses in capacitive touch
+    pinMode(IndCooker_ONOFF, OUTPUT);
+    pinMode(IndCooker_FUNC, OUTPUT);
+    pinMode(IndCooker_negaTEMP, OUTPUT);
+    pinMode(IndCooker_posiTEMP, OUTPUT);
+    //---------------------------------------
 
-  //---------- PB LOGIC --------------------------
-  pinMode(STOP_PB, INPUT_PULLUP);
-  pinMode(START_PB, INPUT_PULLUP);
-  //-----------------------------------
+    //-----------stirrer arm------------------
+    pinMode(stirrer_up, OUTPUT);
+    pinMode(stirrer_down, OUTPUT);
+    pinMode(stirrer_cc, OUTPUT);
+    pinMode(stirrer_cw, OUTPUT);
+    // put pinMode of enA & enB if using L298N
 
-  //------------LIGHT INDICATORS ------------------
-  pinMode(IL_NoSugar, OUTPUT);
-  pinMode(IL_NoNuts, OUTPUT);
-  pinMode(IL_NoWater, OUTPUT);
-  pinMode(IL_Running, OUTPUT);
-  pinMode(IL_Stopped, OUTPUT);
-  //-----------------------------------------------
+    digitalWrite(stirrer_up, LOW);
+    digitalWrite(stirrer_down, LOW);
+    digitalWrite(stirrer_cc, LOW);
+    digitalWrite(stirrer_cw, LOW);
+    //-----------------------------------
 
-  //------------------SERVO MOTORS-----------
-  pwm.begin();
-  pwm.setOscillatorFrequency(27000000);
-  pwm.setPWMFreq(SERVO_FREQ);
-  //--------------------------------
+    //-----------Water Level------------
+    pinMode(WATER_LEVEL_POW, OUTPUT);
+    digitalWrite(WATER_LEVEL_POW, LOW);
+    //-----------WATER DISPENSING---------------
+    pinMode(WaterPump, OUTPUT);
+    //---------------
+
+    //---------- PB LOGIC --------------------------
+    pinMode(STOP_PB, INPUT_PULLUP);
+    pinMode(START_PB, INPUT_PULLUP);
+    //-----------------------------------
+
+    //------------LIGHT INDICATORS ------------------
+    pinMode(IL_NoSugar, OUTPUT);
+    pinMode(IL_NoNuts, OUTPUT);
+    pinMode(IL_NoWater, OUTPUT);
+    pinMode(IL_Running, OUTPUT);
+    pinMode(IL_Stopped, OUTPUT);
+    //-----------------------------------------------
+
+    //------------------SERVO MOTORS-----------
+    pwm.begin();
+    pwm.setOscillatorFrequency(27000000);
+    pwm.setPWMFreq(SERVO_FREQ);
+    //--------------------------------
+
+    //-------------STEPPER MOTORS--------
+    kawaliStepper.setMaxSpeed(1000);
+    kawaliStepper.setAcceleration(50);
+    kawaliStepper.setSpeed(200);
+    kawaliStepper.moveTo(200);
+    //---------------------------
 }
 
 void loop()
 {
-  // Read the state of the buttons
-  int buttonSetState = digitalRead(START_PB);
-  int buttonResetState = digitalRead(STOP_PB);
+    currentMillis = millis();
+    if (currentMillis - previousMillis >= 10)
+    { // start event
+        previousMillis = currentMillis;
+        if (int prevstate = !state)
+        {
+            debug_println(state);
+        }
 
-  // Check if the Set button is pressed
-  if (buttonSetState == LOW && !buttonStartPressed)
-  {
-    unsigned long currentTime = millis();
-    if (currentTime - prevTime_StartPB > debounceDelay_PB)
-    {
-      digitalWrite(LED_BUILTIN, HIGH);
-      machineOnStatus = true;
-      Serial.println("MACHINE IS ON : ");
-      Serial.println(machineOnStatus);
-      buttonStartPressed = true;
-      machine_statusnow = presetup_process;
+        int buttonSetState = digitalRead(START_PB);
+        int buttonResetState = digitalRead(STOP_PB);
+
+        if (buttonSetState == LOW && buttonStartPressed == 0)
+        {
+            state = 1;
+            buttonStartPressed = 1;
+        }
+
+        else if (buttonSetState == HIGH && buttonStartPressed == 1)
+        {
+            delay(250);
+            buttonStartPressed = 0;
+        }
+
+        if (buttonResetState == LOW && buttonStopPressed == 0)
+        {
+            state = -1;
+            buttonStopPressed = 1;
+        }
+
+        else if (buttonResetState == HIGH && buttonStopPressed == 1)
+        {
+            delay(250);
+            buttonStopPressed = 0;
+        }
+
+        if (state == -1 && machineOnStatus == false)
+        { // stop process
+            digitalWrite(IL_NoSugar, LOW);
+            digitalWrite(IL_NoWater, LOW);
+            digitalWrite(IL_NoNuts, LOW);
+            digitalWrite(IL_Running, LOW);
+            digitalWrite(IL_Stopped, HIGH);
+            state = 0;
+            // debug_println("nag-stop");
+            previousMachineMillis = currentMillis;
+        }
+
+        else if (state == 0 && machineOnStatus == true)
+        {
+            digitalWrite(WATER_LEVEL_POW, HIGH);
+            state = 1;
+            debug_println(state + " yeah!");
+            previousMachineMillis = currentMillis;
+        }
+        else if (state == 1)
+        {
+            // idle or presetup process
+            digitalWrite(IL_Running, HIGH); // REvise this code
+            digitalWrite(IL_Stopped, LOW);  // REvise this code
+            water_level = analogRead(WATER_LEVEL_S);
+            distances = HCSR04.measureDistanceCm();
+            // debug_print(distances[0]);
+            // debug_print(distances[1]);
+            debug_println(water_level);
+            if (distances[1] <= 200 && distances[0] <= 200 && water_level > 200)
+            {
+                digitalWrite(LED_BUILTIN, HIGH);
+                digitalWrite(10, HIGH); // TEST ONLY, REMOVE AFTER
+                state = 2;              // move to dispensing process
+            }
+            else
+            {
+                digitalWrite(LED_BUILTIN, LOW);
+                digitalWrite(13, LOW); // TEST ONLY, REMOVE AFTER
+            }
+
+            if (distances[0] >= reqSugarLevel)
+            {
+                digitalWrite(IL_NoSugar, HIGH);
+                debug_println("WALANG LAMAN ASUKAL");
+            }
+            else
+            {
+                digitalWrite(IL_NoSugar, LOW);
+            }
+
+            if (distances[1] >= reqPilinutsLevel)
+            {
+                digitalWrite(IL_NoNuts, HIGH);
+                debug_println("WALANG LAMAN NUTS");
+            }
+            else
+            {
+                digitalWrite(IL_NoNuts, LOW);
+            }
+
+            if (water_level <= 200)
+            {
+                digitalWrite(IL_NoWater, HIGH);
+            }
+            else
+            {
+                digitalWrite(IL_NoWater, LOW);
+                debug_println("WALANG LAMAN WATER");
+            }
+            previousMachineMillis = currentMillis;
+        }
+
+        else if (state == 2 && currentMillis - previousMachineMillis > 4500)
+        {
+            // turn off water lvl sens, on Waterpump
+            digitalWrite(WATER_LEVEL_POW, LOW);
+            digitalWrite(WaterPump, HIGH);
+            previousMachineMillis = currentMillis;
+            state = 3;
+        }
+
+        else if (state == 3 && currentMillis - previousMachineMillis > 2500)
+        {
+            // turn off Waterpump, open sugar hopper servos
+            digitalWrite(WaterPump, LOW);
+            val_sugarHopper = 756;
+            previousMachineMillis = currentMillis;
+            int value = get_Loadcells();
+            debug_println("opening sugar hopper, value: ");
+            if (value > 500)
+            {
+                state = 4;
+            }
+        }
+
+        else if (state == 4 && currentMillis - previousMachineMillis > 5000)
+        {
+            val_sugarHopper = SERVOMIN;
+            debug_println("closed sugar hopper");
+            previousMachineMillis = currentMillis;
+            state = 5;
+        }
+
+        else if (state == 5 && currentMillis - previousMachineMillis > 5000)
+        {
+            // the servo should be intialized in resting position
+            // the servo will go down now, dispensing sugar to cooking pan
+            val_arm1LDcell = 756;
+            val_arm2LDcell = 756;
+            previousMachineMillis = currentMillis;
+            state = 6;
+        }
+
+        else if (state == 6 && currentMillis - previousMachineMillis > 5000)
+        {
+            // arm1LDcell go to resting pos, turn on induction cooker and set it to normal temp multitask
+            val_arm1LDcell = SERVOMIN;
+            val_arm2LDcell = SERVOMIN;
+            stepFlagInduction_Med = 1; // start induction cooker sequence
+            previousMachineMillis = currentMillis;
+            state = 7;
+        }
+
+        else if (state == 7 && currentMillis - previousMachineMillis > 3000)
+        {
+            // let stirrer arm go down, adjust the time on testing, initialize it to be upward
+            digitalWrite(stirrer_down, HIGH);
+            digitalWrite(stirrer_up, LOW);
+            previousMachineMillis = currentMillis;
+            state = 8;
+        }
+
+        else if (state == 8 && currentMillis - previousMachineMillis > 120000)
+        {
+            // stay stirring arm, start rotating sequence for 2 minutes
+            digitalWrite(stirrer_down, LOW);
+            digitalWrite(stirrer_up, LOW);
+            debug_println("time left: " + (currentMillis - previousMachineMillis) / 1000);
+            toggleFlagStirring = 1;
+            previousMachineMillis = currentMillis;
+            state = 9;
+        }
+
+        else if (state == 9 && currentMillis - previousMachineMillis > 2500)
+        {
+            // toggle off stirrer, pilinuts dispensing
+            toggleFlagStirring = 0;
+            val_nutsHopper = 756; // open hopper
+            previousMachineMillis = currentMillis;
+            int value = get_Loadcells();
+            debug_println("pili nuts value: " + value);
+            if (value > 500)
+            {
+                state = 10;
+            }
+        }
+
+        else if (state == 10 && currentMillis - previousMachineMillis > 1000)
+        {
+            // close pili nuts dispensing, drop it to pan
+            val_nutsHopper = SERVOMIN;
+            debug_println("finished for now");
+        }
+
+        // *** SEQUENCES ***
+
+        // stirring arm cc & cw
+        if (toggleFlagStirring == 1 && stepFlagStirring == 0 && currentMillis - previousStirringMillis > 7500)
+        {
+            // set stirrer counterclockwise for 7.5 sec
+            digitalWrite(stirrer_cc, HIGH);
+            digitalWrite(stirrer_cw, LOW);
+            previousStirringMillis = currentMillis;
+            stepFlagStirring = 1;
+        }
+
+        else if (toggleFlagStirring == 1 && stepFlagStirring == 1 && currentMillis - previousStirringMillis > 1000)
+        {
+            // 1 second buffer
+            previousStirringMillis = currentMillis;
+            stepFlagStirring = 2;
+        }
+        else if (toggleFlagStirring == 1 && stepFlagStirring == 2 && currentMillis - previousStirringMillis > 7500)
+        {
+            // set stirrer clockwise for 7.5 sec
+            digitalWrite(stirrer_cc, LOW);
+            digitalWrite(stirrer_cw, HIGH);
+            previousStirringMillis = currentMillis;
+            stepFlagStirring = 3;
+        }
+        else if (toggleFlagStirring == 1 && stepFlagStirring == 3 && currentMillis - previousStirringMillis > 1000)
+        {
+            // 1 second buffer
+            previousStirringMillis = currentMillis;
+            stepFlagStirring = 0;
+        }
+
+        // Induction seq
+        if (stepFlagInduction_Med = 1)
+        {
+            // turn on induction first, send a pulse thru a relay
+            digitalWrite(IndCooker_ONOFF, HIGH);
+            stepFlagInduction_Med = 2;
+            previousInductionMedMillis = currentMillis;
+        }
+
+        else if (stepFlagInduction_Med = 2 && currentMillis - previousInductionMedMillis > 250)
+        {
+            digitalWrite(IndCooker_ONOFF, LOW);
+            stepFlagInduction_Med = 3;
+            previousInductionMedMillis = currentMillis;
+        }
+
+        else if (stepFlagInduction_Med = 3 && currentMillis - previousInductionMedMillis > 250)
+        {
+            // simulate press function button 3 times
+            previousInductionMedMillis = currentMillis;
+            digitalWrite(IndCooker_FUNC, HIGH);
+            stepFlagInduction_Med = 4;
+        }
+
+        else if (stepFlagInduction_Med = 4 && currentMillis - previousInductionMedMillis > 250)
+        {
+            previousInductionMedMillis = currentMillis;
+            digitalWrite(IndCooker_FUNC, LOW);
+            stepFlagInduction_Med = 5;
+        }
+
+        else if (stepFlagInduction_Med = 5 && currentMillis - previousInductionMedMillis > 250)
+        {
+            // simulate press function button 3 times
+            previousInductionMedMillis = currentMillis;
+            digitalWrite(IndCooker_FUNC, HIGH);
+            stepFlagInduction_Med = 6;
+        }
+
+        else if (stepFlagInduction_Med = 6 && currentMillis - previousInductionMedMillis > 250)
+        {
+            previousInductionMedMillis = currentMillis;
+            digitalWrite(IndCooker_FUNC, LOW);
+            stepFlagInduction_Med = 7;
+        }
+
+        else if (stepFlagInduction_Med = 7 && currentMillis - previousInductionMedMillis > 250)
+        {
+            // simulate press function button 3 times
+            previousInductionMedMillis = currentMillis;
+            digitalWrite(IndCooker_FUNC, HIGH);
+            stepFlagInduction_Med = 4;
+        }
+
+        else if (stepFlagInduction_Med = 8 && currentMillis - previousInductionMedMillis > 250)
+        {
+            previousInductionMedMillis = currentMillis;
+            digitalWrite(IndCooker_FUNC, LOW);
+            stepFlagInduction_Med = 0;
+        }
     }
-    prevTime_StartPB = currentTime;
-  }
-  else if (buttonSetState == HIGH)
-  {
-    buttonStartPressed = false;
-  }
 
-  // Check if the Reset button is pressed
-  if (buttonResetState == LOW && !buttonStopPressed)
-  {
-    unsigned long currentTime = millis();
-    if (currentTime - prevTime_StopPB > debounceDelay_PB)
-    {
-      digitalWrite(LED_BUILTIN, LOW);
-      Serial.println("MACHINE IS OFF :");
-      machineOnStatus = false;
-      Serial.println(machineOnStatus);
-      buttonStopPressed = true;
-      machine_statusnow = stop_process;
-    }
-    prevTime_StopPB = currentTime;
-  }
-  else if (buttonResetState == HIGH)
-  {
-    buttonStopPressed = false;
-  }
+    // filter values
+    val_sugarHopperFiltered = filter(val_sugarHopper, val_sugarHopperFiltered, 20);
+    val_nutsHopperFiltered = filter(val_nutsHopper, val_sugarHopperFiltered, 20);
+    val_arm1LDcellFiltered = filter(val_arm1LDcell, val_arm1LDcellFiltered, 20);
+    val_arm2LDcellFiltered = filter(val_arm2LDcell, val_arm2LDcellFiltered, 20);
 
-  // Add any other code you want to execute here
-  switch (machine_statusnow)
-  {
-  case stop_process:
-    // code here
-    digitalWrite(IL_NoSugar, LOW);
-    digitalWrite(IL_NoWater, LOW);
-    digitalWrite(IL_NoNuts, LOW);
-    digitalWrite(IL_Running, LOW);
-    digitalWrite(IL_Stopped, HIGH);
-    machine_buttons();
-    break;
-  case presetup_process:
-    digitalWrite(IL_Running, HIGH); // REvise this code
-    digitalWrite(IL_Stopped, LOW);  // REvise this code
-    machine_buttons();
-    waterLevel();
-
-    distances = HCSR04.measureDistanceCm();
-    // Serial.print(distances[0]);
-    // Serial.print(distances[1]);
-
-    if (distances[1] <= 200 && distances[0] <= 200 && water_level > 200)
-    {
-      digitalWrite(LED_BUILTIN, HIGH);
-      digitalWrite(10, HIGH); // TEST ONLY, REMOVE AFTER
-      machine_statusnow = dispensing_process;
-    }
-    else
-    {
-      digitalWrite(LED_BUILTIN, LOW);
-      digitalWrite(10, LOW); // TEST ONLY, REMOVE AFTER
-    }
-
-    if (distances[0] >= reqSugarLevel)
-    {
-      digitalWrite(IL_NoSugar, HIGH);
-      Serial.println("WALANG LAMAN ASUKAL");
-    }
-    else
-    {
-      digitalWrite(IL_NoSugar, LOW);
-    }
-
-    if (distances[1] >= reqPilinutsLevel)
-    {
-      digitalWrite(IL_NoNuts, HIGH);
-      Serial.println("WALANG LAMAN NUTS");
-    }
-    else
-    {
-      digitalWrite(IL_NoNuts, LOW);
-    }
-
-    if (water_level <= 200)
-    {
-      digitalWrite(IL_NoWater, HIGH);
-    }
-    else
-    {
-      digitalWrite(IL_NoWater, LOW);
-    }
-    break;
-  case dispensing_process:
-    digitalWrite(IL_Running, HIGH); // REvise this code
-    digitalWrite(IL_Stopped, LOW);
-    Serial.println(machine_statusnow);
-    machine_buttons();
-    // dispensing_switch = dispensing_specificprocess(dispensing_switch);
-    water_dispensing();
-    sugarHopper_servo();
-    loadCell_servos();
-
-    // Serial.println("Done yung water dispensing");
-
-    // gagalaw na yung servo adafruit servo
-    // loadCellvalues.update();
-    // if loadcell values => setamount then titigil na yung servo.
-
-    // if done na ung sugarHopper
-
-    break;
-  case cooking_process:
-    digitalWrite(IL_Running, HIGH); // REvise this code
-    digitalWrite(IL_Stopped, LOW);
-    break;
-  case cooling_process:
-    break;
-  case packaging_process:
-    break;
-  default:
-    // nothing
-    Serial.println("nothing");
-    break;
-  }
+    // write filter to servo with trim
+    pwm.writeMicroseconds(sugarHopper, val_sugarHopperFiltered);
+    pwm.writeMicroseconds(nutsHopper, val_nutsHopperFiltered);
+    pwm.writeMicroseconds(arm1LDcell, val_arm1LDcellFiltered);
+    pwm.writeMicroseconds(arm2LDcell, val_arm2LDcellFiltered);
 }
 
 int get_Loadcells()
 {
-  float value;
-  // Serial.print(count);
-  // for (int i = 0; i < 2; i++)
-  // {
-  //   value = scales[i].read_average(10);
-  //   Serial.print("\t");
-  //   Serial.print(String(value) + calib[i]);
-  // }
-  value = scales[0].read_average(10);
-  Serial.print("\t");
-  Serial.print(value);
-  Serial.print("this is the value: " + String(value));
-  return value;
+    int value;
+    // debug_print(count);
+    // for (int i = 0; i < 2; i++)
+    // {
+    //   value = scales[i].read_average(10);
+    //   debug_print("\t");
+    //   debug_print(String(value) + calib[i]);
+    // }
+    value = scales[0].read_average(10);
+    debug_print("\t");
+    debug_print(value);
+    debug_print("this is the value: " + String(value));
+    return value;
 }
 
 int get_Loadcell2()
 {
-  int value;
-  // Serial.print(count);
-  // for (int i = 0; i < 2; i++)
-  // {
-  //   value = scales[i].read_average(10);
-  //   Serial.print("\t");
-  //   Serial.print(String(value) + calib[i]);
-  // }
-  value = scales[1].read_average(10);
-  Serial.print("\t");
-  Serial.print("this is the value: " + String(value));
-  return value;
+    int value;
+    // debug_print(count);
+    // for (int i = 0; i < 2; i++)
+    // {
+    //   value = scales[i].read_average(10);
+    //   debug_print("\t");
+    //   debug_print(String(value) + calib[i]);
+    // }
+    value = scales[1].read_average(10);
+    debug_print("\t");
+    debug_print("this is the value: " + String(value));
+    return value;
 }
 
 void waterLevel()
 {
-  unsigned long currentTime = millis();
+    static unsigned long lastStateTime = millis();
 
-  switch (state)
-  {
-  case IDLE:
-    // Wait for a certain time before starting the process
-    if (currentTime - lastStateTime >= 1000)
-    { // Wait for 1 second
-      state = POWER_ON;
-      lastStateTime = currentTime;
+    switch (Waterstate)
+    {
+    case IDLE:
+        // Wait for a certain time before starting the process
+        if (millis() - lastStateTime >= 1000)
+        { // Wait for 1 second
+            state = POWER_ON;
+            lastStateTime = millis();
+        }
+        break;
+
+    case POWER_ON:
+        digitalWrite(WATER_LEVEL_POW, HIGH); // Turn the sensor ON
+        state = READ_SENSOR;
+        lastStateTime = millis();
+        break;
+
+    case READ_SENSOR:
+        if (millis() - lastStateTime >= 20)
+        {                                            // Wait for 10 milliseconds
+            water_level = analogRead(WATER_LEVEL_S); // Read the analog value from sensor
+            Serial.println("The water level is: " + String(water_level));
+            state = POWER_OFF;
+            lastStateTime = millis();
+        }
+        break;
+
+    case POWER_OFF:
+        digitalWrite(WATER_LEVEL_POW, LOW); // Turn the sensor OFF
+        state = IDLE;
+        lastStateTime = millis();
+        break;
     }
-    break;
-
-  case POWER_ON:
-    digitalWrite(WATER_LEVEL_POW, HIGH); // Turn the sensor ON
-    state = READ_SENSOR;
-    lastStateTime = currentTime;
-    break;
-
-  case READ_SENSOR:
-    if (currentTime - lastStateTime >= 10)
-    {                                          // Wait for 10 milliseconds
-      water_level = analogRead(WATER_LEVEL_S); // Read the analog value from sensor
-      Serial.println("The water level is: " + String(water_level));
-      state = POWER_OFF;
-      lastStateTime = currentTime;
-    }
-    break;
-
-  case POWER_OFF:
-    digitalWrite(WATER_LEVEL_POW, LOW); // Turn the sensor OFF
-    state = IDLE;
-    lastStateTime = currentTime;
-    break;
-  }
 }
 
-void machine_buttons()
+int machine_buttons()
 {
-  // Read the state of the buttons
-  int buttonSetState = digitalRead(START_PB);
-  int buttonResetState = digitalRead(STOP_PB);
+    // Read the state of the buttons
+    int buttonSetState = digitalRead(START_PB);
+    int buttonResetState = digitalRead(STOP_PB);
 
-  // Check if the Set button is pressed
-  if (buttonSetState == LOW && !buttonStartPressed)
-  {
-    unsigned long currentTime = millis();
-    if (currentTime - prevTime_StartPB > debounceDelay_PB)
+    // Check if the Set (green) button is pressed
+    if (buttonSetState == LOW && !buttonStartPressed)
     {
-      digitalWrite(LED_BUILTIN, HIGH);
-      machineOnStatus = true;
-      Serial.println("MACHINE IS ON : ");
-      Serial.println(machineOnStatus);
-      buttonStartPressed = true;
-      machine_statusnow = presetup_process;
+        unsigned long currentTime = millis();
+        if (currentTime - prevTime_StartPB > debounceDelay_PB)
+        {
+            digitalWrite(LED_BUILTIN, HIGH);
+            machineOnStatus = true;
+            debug_println("MACHINE IS ON : ");
+            debug_println(machineOnStatus);
+            buttonStartPressed = true;
+            state = 0;
+            debug_println(state);
+            // machine_statusnow = presetup_process;
+        }
+        prevTime_StartPB = currentTime;
     }
-    prevTime_StartPB = currentTime;
-  }
-  else if (buttonSetState == HIGH)
-  {
-    buttonStartPressed = false;
-  }
+    else if (buttonSetState == HIGH)
+    {
+        buttonStartPressed = false;
+    }
 
-  // Check if the Reset button is pressed
-  if (buttonResetState == LOW && !buttonStopPressed)
-  {
-    unsigned long currentTime = millis();
-    if (currentTime - prevTime_StopPB > debounceDelay_PB)
+    // Check if the Reset (red) button is pressed
+    if (buttonResetState == LOW && !buttonStopPressed)
     {
-      digitalWrite(LED_BUILTIN, LOW);
-      Serial.println("MACHINE IS OFF :");
-      machineOnStatus = false;
-      Serial.println(machineOnStatus);
-      buttonStopPressed = true;
+        unsigned long currentTime = millis();
+        if (currentTime - prevTime_StopPB > debounceDelay_PB)
+        {
+            digitalWrite(LED_BUILTIN, LOW);
+            debug_println("MACHINE IS OFF :");
+            machineOnStatus = false;
+            debug_println(machineOnStatus);
+            buttonStopPressed = true;
+            state = -1;
+            debug_println(state);
+        }
+        prevTime_StopPB = currentTime;
     }
-    prevTime_StopPB = currentTime;
-  }
-  else if (buttonResetState == HIGH)
-  {
-    buttonStopPressed = false;
-  }
+    else if (buttonResetState == HIGH)
+    {
+        buttonStopPressed = false;
+        // waterPump_flag = false;
+        // sugarHopper_flag = false;
+        // loadCell_servos_flag = false;
+        // panRotation_flag = false;
+    }
+
+    return state;
 }
 
 void water_dispensing()
 {
-  if (!waterPump_flag)
-  { // Check if water pump hasn't been activated yet
-    Serial.println("flowing Waterpump");
-    digitalWrite(WaterPump, HIGH);
-    delay(5200); // Wait for 5200 milliseconds (5.2 seconds)
-    digitalWrite(WaterPump, LOW);
-    Serial.println("Done Waterpump");
-    waterPump_flag = true; // Set flag to indicate water pump has run
-  }
+    if (!waterPump_flag)
+    { // Check if water pump hasn't been activated yet
+        debug_println("flowing Waterpump");
+        digitalWrite(WaterPump, HIGH);
+        delay(5200); // Wait for 5200 milliseconds (5.2 seconds)
+        digitalWrite(WaterPump, LOW);
+        debug_println("Done Waterpump");
+        waterPump_flag = true; // Set flag to indicate water pump has run
+    }
 }
 
 void sugarHopper_servo()
 {
-  if (!sugarHopper_flag)
-  {
-    Serial.println("opening hopper");
-    for (uint16_t pulselen = SERVOMIN; pulselen < SERVOMAX; pulselen++)
+    if (!sugarHopper_flag)
     {
-      pwm.setPWM(sugarHopper, 0, pulselen);
-    }
-    int value = get_Loadcells();
+        debug_println("opening hopper");
+        for (uint16_t pulselen = SERVOMIN; pulselen < SERVOMAX; pulselen++)
+        {
+            pwm.setPWM(sugarHopper, 0, pulselen);
+        }
+        int value = get_Loadcells();
 
-    if (value > 500)
-    {
-      // do something
-      Serial.print("closing hoppper");
-      for (uint16_t pulselen = SERVOMAX; pulselen > SERVOMIN; pulselen--)
-      {
-        pwm.setPWM(sugarHopper, 0, pulselen);
-      }
-      sugarHopper_flag = true;
+        if (value > 500)
+        {
+            // do something
+            debug_print("closing hoppper");
+            for (uint16_t pulselen = SERVOMAX; pulselen > SERVOMIN; pulselen--)
+            {
+                pwm.setPWM(sugarHopper, 0, pulselen);
+            }
+            sugarHopper_flag = true;
+        }
+        debug_println(value);
     }
-    Serial.println(value);
-  }
 }
 
 void loadCell_servos()
 {
-  delay(1000);
-  if (!loadCell_servos_flag)
-  {
-    Serial.println("opening LDCELL ARM");
-    for (uint16_t pulselen = SERVOMIN; pulselen < SERVOMAX; pulselen++)
-    {
-      pwm.setPWM(arm1LDcell, 0, pulselen);
-      pwm.setPWM(arm2LDcell, 0, pulselen);
-    }
-    delay(2000);
-    Serial.println("taktak LDCELL ARM");
-    pwm.setPWM(arm1LDcell, 0, SERVOMAX / 2);
-    pwm.setPWM(arm2LDcell, 0, SERVOMAX / 2);
-    for (uint16_t pulselen = SERVOMIN; pulselen < SERVOMAX; pulselen++)
-    {
-      pwm.setPWM(arm1LDcell, 0, pulselen);
-      pwm.setPWM(arm2LDcell, 0, pulselen);
-    }
     delay(1000);
-    Serial.println("default position LDCELL ARM");
-    for (uint16_t pulselen = SERVOMAX; pulselen > SERVOMIN; pulselen--)
+    if (!loadCell_servos_flag)
     {
-      pwm.setPWM(arm1LDcell, 0, pulselen);
-      pwm.setPWM(arm2LDcell, 0, pulselen);
+        debug_println("opening LDCELL ARM");
+        for (uint16_t pulselen = SERVOMIN; pulselen < SERVOMAX; pulselen++)
+        {
+            pwm.setPWM(arm1LDcell, 0, pulselen);
+            pwm.setPWM(arm2LDcell, 0, pulselen);
+        }
+        delay(2000);
+        debug_println("taktak LDCELL ARM");
+        pwm.setPWM(arm1LDcell, 0, SERVOMAX / 2);
+        pwm.setPWM(arm2LDcell, 0, SERVOMAX / 2);
+        for (uint16_t pulselen = SERVOMIN; pulselen < SERVOMAX; pulselen++)
+        {
+            pwm.setPWM(arm1LDcell, 0, pulselen);
+            pwm.setPWM(arm2LDcell, 0, pulselen);
+        }
+        delay(1000);
+        debug_println("default position LDCELL ARM");
+        for (uint16_t pulselen = SERVOMAX; pulselen > SERVOMIN; pulselen--)
+        {
+            pwm.setPWM(arm1LDcell, 0, pulselen);
+            pwm.setPWM(arm2LDcell, 0, pulselen);
+        }
+        delay(1000);
+        loadCell_servos_flag = true;
     }
-    delay(1000);
-    loadCell_servos_flag = true;
-  }
+}
+
+void panRotation()
+{
+    if (!panRotation_flag)
+    {
+        // Move the kawaliStepper motor to the target position
+        kawaliStepper.moveTo(targetPosition);
+        while (kawaliStepper.distanceToGo() != 0)
+        {
+            kawaliStepper.run();
+        }
+
+        // Wait for 4 seconds
+        delay(4000);
+
+        // Move the kawaliStepper motor back to the default position
+        kawaliStepper.moveTo(defaultPosition);
+        while (kawaliStepper.distanceToGo() != 0)
+        {
+            kawaliStepper.run();
+        }
+        panRotation_flag = true;
+    }
 }
 // int dispensing_specificprocess(int dispensing_switch)
 // {
@@ -511,7 +821,7 @@ void loadCell_servos()
 //   case 1:
 //     // do something
 //     dispensing_switch = 2;
-//     Serial.println("opening Waterpump");
+//     debug_println("opening Waterpump");
 //     digitalWrite(WaterPump, HIGH);
 //     delay(4000);
 //     digitalWrite(WaterPump, LOW);
@@ -519,7 +829,7 @@ void loadCell_servos()
 
 //   case 2:
 //     // open hopper
-//     Serial.println("opening hopper");
+//     debug_println("opening hopper");
 //     for (uint16_t pulselen = SERVOMIN; pulselen < SERVOMAX; pulselen++)
 //     {
 //       pwm.setPWM(sugarHopper, 0, pulselen);
@@ -529,26 +839,26 @@ void loadCell_servos()
 //     if (value > 500)
 //     {
 //       // do something
-//       Serial.print("closing hoppper");
+//       debug_print("closing hoppper");
 //       for (uint16_t pulselen = SERVOMAX; pulselen > SERVOMIN; pulselen--)
 //       {
 //         pwm.setPWM(sugarHopper, 0, pulselen);
 //       }
 //     }
 
-//     Serial.println(String(value));
+//     debug_println(String(value));
 //     dispensing_switch = 3;
 //     break;
 
 //   case 3:
-//     Serial.println("doing something3");
+//     debug_println("doing something3");
 //     value = 0;
 //     dispensing_switch = 0;
 //     dispensing_flag = false;
 //     break;
 
 //   default:
-//     Serial.println("doing something default");
+//     debug_println("doing something default");
 //     dispensing_switch = 0;
 //     dispensing_flag = false;
 //     break;
