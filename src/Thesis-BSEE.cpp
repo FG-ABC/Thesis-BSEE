@@ -7,7 +7,7 @@
 #include <Adafruit_PWMServoDriver.h>
 #include "AccelStepper.h"
 
-#define DEBUG // Uncomment to enable debug printing
+#define DEBUG // Uncomment to disable debugging printing
 
 #ifdef DEBUG
 #define debug_print(x) Serial.print(x)
@@ -28,6 +28,8 @@ unsigned int reqSugarLevel = 17; // required sugar level
 unsigned long currentMillis;
 unsigned long previousMillis = 0; // set up timer for whole machine
 const unsigned long interval = 20;
+unsigned long bookmarkTime; // capture starting time
+long timeleft;              // time left as it counts down
 
 unsigned long previousMachineMillis = 0;
 unsigned long previousInductionMedMillis = 0;
@@ -103,8 +105,8 @@ int IndCooker_posiTEMP = 10;
 //--------------------------------
 
 //---------Stirrer Arm---------------
-int stirrer_up = 30;
-int stirrer_down = 31;
+int stirrer_up = 30;   // 1 min and 11 secs pataas
+int stirrer_down = 31; // 1min and 5 secs pababa
 int stirrer_cc = 32;
 int stirrer_cw = 33;
 // add EnA in pwm pin if using L298N motor driver
@@ -223,7 +225,7 @@ void setup()
     //-----------ULTRASONIC-------------------
     HCSR04.begin(triggerPin, echoPins, echoCount);
     pinMode(LED_BUILTIN, OUTPUT);
-    pinMode(10, OUTPUT); // TEST ONLY, REMOVE AFTER
+    pinMode(13, OUTPUT); // TEST ONLY, REMOVE AFTER
     //-------------------------------------
 
     //------------Induction Cooker--------------
@@ -295,6 +297,7 @@ void loop()
         int buttonSetState = digitalRead(START_PB);
         int buttonResetState = digitalRead(STOP_PB);
 
+        // start button logic
         if (buttonSetState == LOW && buttonStartPressed == 0)
         {
             state = 1;
@@ -307,8 +310,10 @@ void loop()
             buttonStartPressed = 0;
         }
 
+        // stop button logic
         if (buttonResetState == LOW && buttonStopPressed == 0)
         {
+            // set all to resting or initial position
             state = -1;
             buttonStopPressed = 1;
         }
@@ -351,7 +356,7 @@ void loop()
             if (distances[1] <= 200 && distances[0] <= 200 && water_level > 200)
             {
                 digitalWrite(LED_BUILTIN, HIGH);
-                digitalWrite(10, HIGH); // TEST ONLY, REMOVE AFTER
+                digitalWrite(13, HIGH); // TEST ONLY, REMOVE AFTER
                 state = 2;              // move to dispensing process
             }
             else
@@ -392,78 +397,126 @@ void loop()
             previousMachineMillis = currentMillis;
         }
 
-        else if (state == 2 && currentMillis - previousMachineMillis > 4500)
+        else if (state == 2 && currentMillis - previousMachineMillis > 1000)
         {
             // turn off water lvl sens, on Waterpump
             digitalWrite(WATER_LEVEL_POW, LOW);
             digitalWrite(WaterPump, HIGH);
+            debug_println("WAterPump is open");
             previousMachineMillis = currentMillis;
             state = 3;
         }
 
-        else if (state == 3 && currentMillis - previousMachineMillis > 2500)
+        else if (state == 3 && currentMillis - previousMachineMillis > 4500)
         {
-            // turn off Waterpump, open sugar hopper servos
+            // turn off Waterpump
             digitalWrite(WaterPump, LOW);
+            debug_println("WAterPump is closed");
+            previousMachineMillis = currentMillis;
+            state = 4;
+        }
+
+        else if (state == 4 && currentMillis - previousMachineMillis > 250)
+        {
+            // open sugar hopper servos
             val_sugarHopper = 756;
             previousMachineMillis = currentMillis;
             int value = get_Loadcells();
             debug_println("opening sugar hopper, value: ");
             if (value > 500)
             {
-                state = 4;
+                state = 5;
             }
-        }
-
-        else if (state == 4 && currentMillis - previousMachineMillis > 5000)
-        {
-            val_sugarHopper = SERVOMIN;
-            debug_println("closed sugar hopper");
-            previousMachineMillis = currentMillis;
-            state = 5;
         }
 
         else if (state == 5 && currentMillis - previousMachineMillis > 5000)
         {
-            // the servo should be intialized in resting position
-            // the servo will go down now, dispensing sugar to cooking pan
-            val_arm1LDcell = 756;
-            val_arm2LDcell = 756;
+            val_sugarHopper = SERVOMIN;
+            debug_println("closed sugar hopper");
             previousMachineMillis = currentMillis;
             state = 6;
         }
 
         else if (state == 6 && currentMillis - previousMachineMillis > 5000)
         {
-            // arm1LDcell go to resting pos, turn on induction cooker and set it to normal temp multitask
-            val_arm1LDcell = SERVOMIN;
-            val_arm2LDcell = SERVOMIN;
-            stepFlagInduction_Med = 1; // start induction cooker sequence
+            // the servo should be intialized in resting position
+            // the servo will go down now, dispensing sugar to cooking pan
+            val_arm1LDcell = 756;
+            val_arm2LDcell = 756;
+            debug_println("from hopper (sugar) to pan");
             previousMachineMillis = currentMillis;
             state = 7;
         }
 
-        else if (state == 7 && currentMillis - previousMachineMillis > 3000)
+        else if (state == 7 && currentMillis - previousMachineMillis > 5000)
         {
-            // let stirrer arm go down, adjust the time on testing, initialize it to be upward
-            digitalWrite(stirrer_down, HIGH);
-            digitalWrite(stirrer_up, LOW);
+            // arm1LDcell go to resting pos, turn on induction cooker and set it to normal temp multitask
+            val_arm1LDcell = SERVOMIN;
+            val_arm2LDcell = SERVOMIN;
+            debug_println("turn on induction cooker");
+            stepFlagInduction_Med = 1; // start induction cooker sequence
             previousMachineMillis = currentMillis;
             state = 8;
         }
 
-        else if (state == 8 && currentMillis - previousMachineMillis > 120000)
+        else if (state == 8 && currentMillis - previousMachineMillis > 5000)
         {
-            // stay stirring arm, start rotating sequence for 2 minutes
-            digitalWrite(stirrer_down, LOW);
+            // let stirrer arm go down, adjust the time on testing, initialize it to be upward
+            // capture the time
+            digitalWrite(stirrer_down, HIGH);
             digitalWrite(stirrer_up, LOW);
-            debug_println("time left: " + (currentMillis - previousMachineMillis) / 1000);
-            toggleFlagStirring = 1;
+            bookmarkTime = millis() + 5000; // set clock timer for 1min 11 sec or 71000
             previousMachineMillis = currentMillis;
             state = 9;
         }
 
-        else if (state == 9 && currentMillis - previousMachineMillis > 2500)
+        else if (state == 9 && currentMillis - previousMachineMillis > 50)
+        {
+
+            // during
+            digitalWrite(stirrer_down, HIGH);
+            digitalWrite(stirrer_up, LOW);
+            timeleft = bookmarkTime - millis();
+            debug_println("time left: " + String(timeleft / 1000));
+            if (timeleft <= 0)
+            {
+                // after
+                // stay stirring arm, start rotating sequence for 2 minutes
+                // timeleft = 0;
+                toggleFlagStirring = 1;
+                digitalWrite(stirrer_down, LOW);
+                previousMachineMillis = currentMillis;
+                state = 10;
+            }
+            previousMachineMillis = currentMillis;
+        }
+
+        else if (state == 10 && currentMillis - previousMachineMillis > 1000)
+        {
+            debug_println("resseting clock");
+            bookmarkTime = 0;
+            timeleft = 0;
+            bookmarkTime = millis() + 12000; // set clocktime for 2 minutes. or 120000
+            toggleFlagStirring = 1;
+            previousMachineMillis = currentMillis;
+            state = 11;
+        }
+
+        else if (state == 11 && currentMillis - previousMachineMillis > 50)
+        {
+            // during
+            timeleft = bookmarkTime - millis();
+            debug_println(" boiling time left: " + String(timeleft / 1000));
+            previousMachineMillis = currentMillis;
+            if (timeleft <= 0)
+            {
+                // after
+                toggleFlagStirring = 0; // off stirring
+                state = 12;
+            }
+        }
+
+        else if (state == 12 && currentMillis - previousMachineMillis > 1000)
         {
             // toggle off stirrer, pilinuts dispensing
             toggleFlagStirring = 0;
@@ -473,11 +526,11 @@ void loop()
             debug_println("pili nuts value: " + value);
             if (value > 500)
             {
-                state = 10;
+                state = 13;
             }
         }
 
-        else if (state == 10 && currentMillis - previousMachineMillis > 1000)
+        else if (state == 13 && currentMillis - previousMachineMillis > 1000)
         {
             // close pili nuts dispensing, drop it to pan
             val_nutsHopper = SERVOMIN;
@@ -492,6 +545,7 @@ void loop()
             // set stirrer counterclockwise for 7.5 sec
             digitalWrite(stirrer_cc, HIGH);
             digitalWrite(stirrer_cw, LOW);
+            debug_println("stiriing to counterclockwise");
             previousStirringMillis = currentMillis;
             stepFlagStirring = 1;
         }
@@ -507,6 +561,7 @@ void loop()
             // set stirrer clockwise for 7.5 sec
             digitalWrite(stirrer_cc, LOW);
             digitalWrite(stirrer_cw, HIGH);
+            debug_println("stiriing to clockwise");
             previousStirringMillis = currentMillis;
             stepFlagStirring = 3;
         }
@@ -518,7 +573,7 @@ void loop()
         }
 
         // Induction seq
-        if (stepFlagInduction_Med = 1)
+        if (stepFlagInduction_Med == 1)
         {
             // turn on induction first, send a pulse thru a relay
             digitalWrite(IndCooker_ONOFF, HIGH);
@@ -526,14 +581,14 @@ void loop()
             previousInductionMedMillis = currentMillis;
         }
 
-        else if (stepFlagInduction_Med = 2 && currentMillis - previousInductionMedMillis > 250)
+        else if (stepFlagInduction_Med == 2 && currentMillis - previousInductionMedMillis > 500)
         {
             digitalWrite(IndCooker_ONOFF, LOW);
             stepFlagInduction_Med = 3;
             previousInductionMedMillis = currentMillis;
         }
 
-        else if (stepFlagInduction_Med = 3 && currentMillis - previousInductionMedMillis > 250)
+        else if (stepFlagInduction_Med == 3 && currentMillis - previousInductionMedMillis > 250)
         {
             // simulate press function button 3 times
             previousInductionMedMillis = currentMillis;
@@ -541,14 +596,14 @@ void loop()
             stepFlagInduction_Med = 4;
         }
 
-        else if (stepFlagInduction_Med = 4 && currentMillis - previousInductionMedMillis > 250)
+        else if (stepFlagInduction_Med == 4 && currentMillis - previousInductionMedMillis > 250)
         {
             previousInductionMedMillis = currentMillis;
             digitalWrite(IndCooker_FUNC, LOW);
             stepFlagInduction_Med = 5;
         }
 
-        else if (stepFlagInduction_Med = 5 && currentMillis - previousInductionMedMillis > 250)
+        else if (stepFlagInduction_Med == 5 && currentMillis - previousInductionMedMillis > 250)
         {
             // simulate press function button 3 times
             previousInductionMedMillis = currentMillis;
@@ -556,25 +611,26 @@ void loop()
             stepFlagInduction_Med = 6;
         }
 
-        else if (stepFlagInduction_Med = 6 && currentMillis - previousInductionMedMillis > 250)
+        else if (stepFlagInduction_Med == 6 && currentMillis - previousInductionMedMillis > 250)
         {
             previousInductionMedMillis = currentMillis;
             digitalWrite(IndCooker_FUNC, LOW);
             stepFlagInduction_Med = 7;
         }
 
-        else if (stepFlagInduction_Med = 7 && currentMillis - previousInductionMedMillis > 250)
+        else if (stepFlagInduction_Med == 7 && currentMillis - previousInductionMedMillis > 250)
         {
             // simulate press function button 3 times
             previousInductionMedMillis = currentMillis;
             digitalWrite(IndCooker_FUNC, HIGH);
-            stepFlagInduction_Med = 4;
+            stepFlagInduction_Med = 8;
         }
 
-        else if (stepFlagInduction_Med = 8 && currentMillis - previousInductionMedMillis > 250)
+        else if (stepFlagInduction_Med == 8 && currentMillis - previousInductionMedMillis > 250)
         {
             previousInductionMedMillis = currentMillis;
             digitalWrite(IndCooker_FUNC, LOW);
+            debug_println("finished setting induction to medium heat");
             stepFlagInduction_Med = 0;
         }
     }
