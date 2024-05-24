@@ -5,10 +5,10 @@
 #include <Wire.h>
 #include <SPI.h>
 #include <Adafruit_PWMServoDriver.h>
+#include <LiquidCrystal_I2C.h>
 #include "AccelStepper.h"
 
 #define DEBUG // Uncomment to disable debugging printing
-
 #ifdef DEBUG
 #define debug_print(x) Serial.print(x)
 #define debug_println(x) Serial.println(x)
@@ -16,6 +16,13 @@
 #define debug_print(x)   // Empty statement
 #define debug_println(x) // Empty statement
 #endif
+
+//-------------address-------------------
+/*
+0x27: LCD
+0x40: Servo driver
+0x70: nano
+*/
 
 //----------USER INTERFACE-------------------
 unsigned int reqPilinutsLevel = 17;
@@ -145,6 +152,10 @@ int water_level = 0;
 const int WaterPump = 26;
 //-------------------------------
 
+//------------------LCD----------------------
+LiquidCrystal_I2C lcd(0x27, 16, 2); // Set the LCD address and size
+//---------------------------------------
+
 //------------------- PB LOGIC ----------------
 const int START_PB = 29;
 const int STOP_PB = 28;
@@ -236,6 +247,17 @@ void setup()
     pinMode(IndCooker_posiTEMP, OUTPUT);
     //---------------------------------------
 
+    //--------------LCD----------------------
+    lcd.init();          // Initialize the LCD
+    lcd.backlight();     // Turn on backlight
+    lcd.clear();         // Clear the LCD display
+    lcd.setCursor(0, 0); // Set cursor position
+    lcd.print("Setting up Machine...");
+    lcd.setCursor(0, 1);
+    lcd.print("Please wait..."); // Print the counter value
+    delay(1000);
+    //-----------------------------------------------
+
     //-----------stirrer arm------------------
     pinMode(stirrer_up, OUTPUT);
     pinMode(stirrer_down, OUTPUT);
@@ -287,7 +309,8 @@ void loop()
 {
     currentMillis = millis();
     if (currentMillis - previousMillis >= 10)
-    { // start event
+    {
+        // start event
         previousMillis = currentMillis;
         if (int prevstate = !state)
         {
@@ -325,12 +348,24 @@ void loop()
         }
 
         if (state == -1 && machineOnStatus == false)
-        { // stop process
+        {
+            // stop process is ran once.
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Machine Status:");
+            lcd.setCursor(0, 1);
+            lcd.print("Stopped");
             digitalWrite(IL_NoSugar, LOW);
             digitalWrite(IL_NoWater, LOW);
             digitalWrite(IL_NoNuts, LOW);
             digitalWrite(IL_Running, LOW);
             digitalWrite(IL_Stopped, HIGH);
+            bookmarkTime = 0; // reset timers to 0
+            timeleft = 0;
+            stepFlagInduction_Low = 0; // reset to initial position
+            stepFlagInduction_Med = 0;
+            toggleFlagStirring = 0;
+
             state = 0;
             // debug_println("nag-stop");
             previousMachineMillis = currentMillis;
@@ -346,6 +381,16 @@ void loop()
         else if (state == 1)
         {
             // idle or presetup process
+            static int runOnce = 0;
+            if (runOnce == 0)
+            {
+                lcd.clear();
+                lcd.setCursor(0, 0); // Set cursor position
+                lcd.print("Please Fill the");
+                lcd.setCursor(0, 1);
+                lcd.print("Ingredients");
+                runOnce = 1;
+            }
             digitalWrite(IL_Running, HIGH); // REvise this code
             digitalWrite(IL_Stopped, LOW);  // REvise this code
             water_level = analogRead(WATER_LEVEL_S);
@@ -400,6 +445,12 @@ void loop()
         else if (state == 2 && currentMillis - previousMachineMillis > 1000)
         {
             // turn off water lvl sens, on Waterpump
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Water Pump: ");
+            lcd.setCursor(0, 1);
+            lcd.print("   Open");
+
             digitalWrite(WATER_LEVEL_POW, LOW);
             digitalWrite(WaterPump, HIGH);
             debug_println("WAterPump is open");
@@ -410,6 +461,12 @@ void loop()
         else if (state == 3 && currentMillis - previousMachineMillis > 4500)
         {
             // turn off Waterpump
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Water Pump: ");
+            lcd.setCursor(0, 1);
+            lcd.print("    Closed");
+
             digitalWrite(WaterPump, LOW);
             debug_println("WAterPump is closed");
             previousMachineMillis = currentMillis;
@@ -419,6 +476,16 @@ void loop()
         else if (state == 4 && currentMillis - previousMachineMillis > 250)
         {
             // open sugar hopper servos
+            static int runOnce = 0;
+            if (runOnce == 0)
+            {
+                lcd.clear();
+                lcd.setCursor(0, 0); // Set cursor position
+                lcd.print("Sugar Hopper");
+                lcd.setCursor(10, 1);
+                lcd.print("grams");
+                runOnce = 1;
+            }
             val_sugarHopper = 756;
             previousMachineMillis = currentMillis;
             int value = get_Loadcells();
@@ -427,10 +494,18 @@ void loop()
             {
                 state = 5;
             }
+            lcd.setCursor(0, 1);
+            lcd.print(String(value));
         }
 
         else if (state == 5 && currentMillis - previousMachineMillis > 5000)
         {
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Sugar Hopper: ");
+            lcd.setCursor(0, 1);
+            lcd.print("   Closed");
+
             val_sugarHopper = SERVOMIN;
             debug_println("closed sugar hopper");
             previousMachineMillis = currentMillis;
@@ -441,6 +516,12 @@ void loop()
         {
             // the servo should be intialized in resting position
             // the servo will go down now, dispensing sugar to cooking pan
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Sugar to Pan:");
+            lcd.setCursor(0, 1);
+            lcd.print("Dispensing...");
+
             val_arm1LDcell = 756;
             val_arm2LDcell = 756;
             debug_println("from hopper (sugar) to pan");
@@ -453,6 +534,12 @@ void loop()
             // arm1LDcell go to resting pos, turn on induction cooker and set it to normal temp multitask
             val_arm1LDcell = SERVOMIN;
             val_arm2LDcell = SERVOMIN;
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Turning on");
+            lcd.setCursor(0, 1);
+            lcd.print("Cooker");
+
             debug_println("turn on induction cooker");
             stepFlagInduction_Med = 1; // start induction cooker sequence
             previousMachineMillis = currentMillis;
@@ -463,6 +550,12 @@ void loop()
         {
             // let stirrer arm go down, adjust the time on testing, initialize it to be upward
             // capture the time
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Stirrer down");
+            lcd.setCursor(0, 1);
+            lcd.print("Timeleft: ");
+
             digitalWrite(stirrer_down, HIGH);
             digitalWrite(stirrer_up, LOW);
             bookmarkTime = millis() + 5000; // set clock timer for 1min 11 sec or 71000
@@ -474,10 +567,13 @@ void loop()
         {
 
             // during
+
             digitalWrite(stirrer_down, HIGH);
             digitalWrite(stirrer_up, LOW);
             timeleft = bookmarkTime - millis();
-            debug_println("time left: " + String(timeleft / 1000));
+            debug_println("down timeleft: " + String(timeleft / 1000));
+            lcd.setCursor(10, 1);
+            lcd.print(String(timeleft / 1000));
             if (timeleft <= 0)
             {
                 // after
@@ -485,6 +581,8 @@ void loop()
                 // timeleft = 0;
                 toggleFlagStirring = 1;
                 digitalWrite(stirrer_down, LOW);
+                lcd.setCursor(10, 1);
+                lcd.print("DONE");
                 previousMachineMillis = currentMillis;
                 state = 10;
             }
@@ -493,6 +591,12 @@ void loop()
 
         else if (state == 10 && currentMillis - previousMachineMillis > 1000)
         {
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Boiling");
+            lcd.setCursor(0, 1);
+            lcd.print("Timeleft: ");
+
             debug_println("resseting clock");
             bookmarkTime = 0;
             timeleft = 0;
@@ -507,10 +611,14 @@ void loop()
             // during
             timeleft = bookmarkTime - millis();
             debug_println(" boiling time left: " + String(timeleft / 1000));
+            lcd.setCursor(10, 1);
+            lcd.print(String(timeleft / 1000) + "s");
             previousMachineMillis = currentMillis;
             if (timeleft <= 0)
             {
                 // after
+                lcd.setCursor(10, 1);
+                lcd.print("DONE");
                 toggleFlagStirring = 0; // off stirring
                 state = 12;
             }
@@ -519,6 +627,18 @@ void loop()
         else if (state == 12 && currentMillis - previousMachineMillis > 1000)
         {
             // toggle off stirrer, pilinuts dispensing
+
+            static int runOnce = 0;
+            if (runOnce == 0)
+            {
+                lcd.clear();
+                lcd.setCursor(0, 0); // Set cursor position
+                lcd.print("Nuts Hopper");
+                lcd.setCursor(10, 1);
+                lcd.print("grams");
+                runOnce = 1;
+            }
+
             toggleFlagStirring = 0;
             val_nutsHopper = 756; // open hopper
             previousMachineMillis = currentMillis;
@@ -528,13 +648,159 @@ void loop()
             {
                 state = 13;
             }
+            lcd.setCursor(0, 1);
+            lcd.print(String(value));
         }
 
-        else if (state == 13 && currentMillis - previousMachineMillis > 1000)
+        else if (state == 13 && currentMillis - previousMachineMillis > 500)
         {
-            // close pili nuts dispensing, drop it to pan
+            // close pili nuts hopper, drop it to pan
+
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Nuts hopper: ");
+            lcd.setCursor(0, 1);
+            lcd.print("   Closed");
+
             val_nutsHopper = SERVOMIN;
+            debug_println("Closing nuts hopper");
+            previousMachineMillis = currentMillis;
+            state = 14;
+        }
+
+        else if (state == 14 && currentMillis - previousMachineMillis > 5000)
+        {
+            // the servo should be intialized in resting position
+            // the servo will go down now, dispensing nuts to cooking pan
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Nuts to pan:");
+            lcd.setCursor(0, 1);
+            lcd.print("  Dispensing");
+
+            val_arm1LDcell = 756;
+            val_arm2LDcell = 756;
+            debug_println("from hopper (nuts) to pan");
+            previousMachineMillis = currentMillis;
+            state = 15;
+        }
+
+        else if (state == 15 && currentMillis - previousMachineMillis > 5000)
+        {
+            // servo arm to resting position
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Dispenser to");
+            lcd.setCursor(0, 1);
+            lcd.print("Resting");
+
+            val_arm1LDcell = SERVOMIN;
+            val_arm2LDcell = SERVOMIN;
+            debug_println("LD cell arm back to resting pos");
+            previousMachineMillis = currentMillis;
+            state = 16;
+        }
+
+        else if (state == 16 && currentMillis - previousMachineMillis > 5000)
+        {
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Boiling 3min");
+            lcd.setCursor(0, 1);
+            lcd.print("Timeleft: ");
+
+            debug_println("resseting clock for boiling again");
+            bookmarkTime = 0;
+            timeleft = 0;
+            bookmarkTime = millis() + 18000; // set clocktime for 3 minutes. or 180000
+            previousMachineMillis = currentMillis;
+            state = 17;
+        }
+
+        else if (state == 17 && currentMillis - previousMachineMillis > 50)
+        {
+            // during
+            timeleft = bookmarkTime - millis();
+            debug_println("boiling time left: " + String(timeleft / 1000));
+            toggleFlagStirring = 1;
+            lcd.setCursor(10, 1);
+            lcd.print(String(timeleft / 1000) + "s");
+            previousMachineMillis = currentMillis;
+            if (timeleft <= 0)
+            {
+                // after
+                lcd.setCursor(10, 1);
+                lcd.print("DONE");
+                toggleFlagStirring = 0; // off stirring
+                state = 18;
+            }
+        }
+
+        else if (state == 18 && currentMillis - previousMachineMillis > 2000)
+        {
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Boiling 5min");
+            lcd.setCursor(0, 1);
+            lcd.print("Timeleft: ");
+
+            debug_println("resseting clock for boiling again");
+            bookmarkTime = 0;
+            timeleft = 0;
+            stepFlagInduction_Low = 1;      // Set the temperature to low or 180 degrees
+            bookmarkTime = millis() + 5000; // set clocktime for 5 minutes. or 300000
+            previousMachineMillis = currentMillis;
+            state = 19;
+        }
+
+        else if (state == 19 && currentMillis - previousMachineMillis > 50)
+        {
+            timeleft = bookmarkTime - millis();
+            debug_println("boiling time left: " + String(timeleft / 1000));
+            toggleFlagStirring = 1; // on stirring
+            lcd.setCursor(10, 1);
+            lcd.print(String(timeleft / 1000) + "s");
+            previousMachineMillis = currentMillis;
+            if (timeleft <= 0)
+            {
+                // after
+                lcd.setCursor(10, 1);
+                lcd.print("DONE");
+                toggleFlagStirring = 0; // off stirring
+                state = 20;
+            }
+        }
+
+        else if (state == 20 && currentMillis - previousMachineMillis > 1000)
+        {
+            // rotate the pan to the hopper below
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Moving pan");
+            lcd.setCursor(0, 1);
+            lcd.print("Rotating...");
+
+            kawaliStepper.moveTo(1206); // dispensing position
+            kawaliStepper.setSpeed(300);
+            debug_println("pan is dispensing the cooked nuts");
+            previousMachineMillis = currentMillis;
+            state = 21;
+        }
+
+        else if (state == 21 && currentMillis - previousMachineMillis > 5000)
+        {
+            // rotate the pan to its resting position.
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Returning Pan");
+            lcd.setCursor(0, 1);
+            lcd.print("Resting...");
+
+            kawaliStepper.moveTo(756); // resting position
+            kawaliStepper.setSpeed(300);
             debug_println("finished for now");
+            previousMachineMillis = currentMillis;
+            state = 0;
         }
 
         // *** SEQUENCES ***
@@ -576,6 +842,8 @@ void loop()
         if (stepFlagInduction_Med == 1)
         {
             // turn on induction first, send a pulse thru a relay
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("set to med temp");
             digitalWrite(IndCooker_ONOFF, HIGH);
             stepFlagInduction_Med = 2;
             previousInductionMedMillis = currentMillis;
@@ -630,8 +898,107 @@ void loop()
         {
             previousInductionMedMillis = currentMillis;
             digitalWrite(IndCooker_FUNC, LOW);
-            debug_println("finished setting induction to medium heat");
+            debug_println("setting to adjustable temp");
+            stepFlagInduction_Med = 9;
+        }
+
+        else if (stepFlagInduction_Med == 9 && currentMillis - previousInductionMedMillis > 250)
+        {
+            previousInductionMedMillis = currentMillis;
+            digitalWrite(IndCooker_negaTEMP, LOW);
+            stepFlagInduction_Med = 10;
+        }
+
+        else if (stepFlagInduction_Med == 10 && currentMillis - previousInductionMedMillis > 250)
+        {
+            previousInductionMedMillis = currentMillis;
+            digitalWrite(IndCooker_negaTEMP, HIGH);
+            stepFlagInduction_Med = 11;
+        }
+
+        else if (stepFlagInduction_Med == 11 && currentMillis - previousInductionMedMillis > 250)
+        {
+            previousInductionMedMillis = currentMillis;
+            digitalWrite(IndCooker_negaTEMP, LOW);
+            stepFlagInduction_Med = 12;
+        }
+
+        else if (stepFlagInduction_Med == 12 && currentMillis - previousInductionMedMillis > 250)
+        {
+            previousInductionMedMillis = currentMillis;
+            digitalWrite(IndCooker_negaTEMP, HIGH);
+            stepFlagInduction_Med = 13;
+        }
+
+        else if (stepFlagInduction_Med == 13 && currentMillis - previousInductionMedMillis > 250)
+        {
+            previousInductionMedMillis = currentMillis;
+            digitalWrite(IndCooker_negaTEMP, LOW);
+            stepFlagInduction_Med = 14;
+        }
+
+        else if (stepFlagInduction_Med == 14 && currentMillis - previousInductionMedMillis > 250)
+        {
+            previousInductionMedMillis = currentMillis;
+            digitalWrite(IndCooker_negaTEMP, HIGH);
+            stepFlagInduction_Med = 15;
+        }
+
+        else if (stepFlagInduction_Med == 15 && currentMillis - previousInductionMedMillis > 250)
+        {
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Boiling        ");
+            debug_println("finished setting to (MED) 180 degrees C");
+            digitalWrite(IndCooker_negaTEMP, LOW);
+            previousInductionMedMillis = currentMillis;
             stepFlagInduction_Med = 0;
+        }
+
+        // setting to low temp seq
+        if (stepFlagInduction_Low == 1)
+        {
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("set to low temp");
+            digitalWrite(IndCooker_negaTEMP, LOW);
+            previousInductionLowMillis = currentMillis;
+            stepFlagInduction_Low = 2;
+        }
+
+        else if (stepFlagInduction_Low == 2 && currentMillis - previousInductionLowMillis > 500)
+        {
+            digitalWrite(IndCooker_negaTEMP, HIGH);
+            previousInductionLowMillis = currentMillis;
+            stepFlagInduction_Low = 3;
+        }
+
+        else if (stepFlagInduction_Low == 3 && currentMillis - previousInductionLowMillis > 500)
+        {
+            digitalWrite(IndCooker_negaTEMP, LOW);
+            previousInductionLowMillis = currentMillis;
+            stepFlagInduction_Low = 4;
+        }
+
+        else if (stepFlagInduction_Low == 4 && currentMillis - previousInductionLowMillis > 500)
+        {
+            digitalWrite(IndCooker_negaTEMP, HIGH);
+            previousInductionLowMillis = currentMillis;
+            stepFlagInduction_Low = 5;
+        }
+
+        else if (stepFlagInduction_Low == 5 && currentMillis - previousInductionLowMillis > 500)
+        {
+            digitalWrite(IndCooker_negaTEMP, LOW);
+            previousInductionLowMillis = currentMillis;
+            stepFlagInduction_Low = 6;
+        }
+
+        else if (stepFlagInduction_Low == 6 && currentMillis - previousInductionLowMillis > 500)
+        {
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Boiling        ");
+            digitalWrite(IndCooker_negaTEMP, HIGH);
+            previousInductionLowMillis = currentMillis;
+            stepFlagInduction_Low = 0;
         }
     }
 
