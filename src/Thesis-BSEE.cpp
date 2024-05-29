@@ -31,6 +31,9 @@ unsigned int reqSugarLevel = 17; // required sugar level
 
 //---------------------------------
 
+//-----------I2C Communication-----------------
+char startNano = 's';
+
 //-----------TIME MILLIS -----------------
 unsigned long currentMillis;
 unsigned long previousMillis = 0; // set up timer for whole machine
@@ -246,6 +249,9 @@ void setup()
     pinMode(IndCooker_negaTEMP, OUTPUT);
     pinMode(IndCooker_posiTEMP, OUTPUT);
     //---------------------------------------
+
+    //--------------I2C Communication----------
+    Wire.begin(); // Start I2C communication as master
 
     //--------------LCD----------------------
     lcd.init();          // Initialize the LCD
@@ -799,6 +805,17 @@ void loop()
             kawaliStepper.moveTo(756); // resting position
             kawaliStepper.setSpeed(300);
             debug_println("finished for now");
+            previousMachineMillis = currentMillis;
+            state = 22;
+        }
+
+        else if (state == 22 && currentMillis - previousMillis > 1000)
+        {
+            Wire.beginTransmission(9); // Set slave address (0x70) or (9)
+            Wire.write(startNano);     // Send character
+            Wire.endTransmission();
+
+            debug_println("Instruction sent to Nano");
             previousMachineMillis = currentMillis;
             state = 0;
         }
