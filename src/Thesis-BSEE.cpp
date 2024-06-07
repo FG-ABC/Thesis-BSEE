@@ -48,7 +48,7 @@ unsigned long previousStirringMillis = 0;
 //------------------------
 
 //--------------automation-------------
-int state = -1; // stage of automation
+int state = -1; // stage of automation //original position and number is -1
 //-------------------------------
 
 //----------MACHINE PROCESS STATUS------------------
@@ -108,17 +108,18 @@ int toggleFlagStirring = 0; // stirring arm toggle sequence. 1 means On, 0 means
 //---------------------
 
 //-----------INDUCTION COOKER---------------
-int IndCooker_ONOFF = 7;
+const int IndCooker_ONOFF = 7;
 int IndCooker_FUNC = 8;
 int IndCooker_negaTEMP = 9;
 int IndCooker_posiTEMP = 10;
 //--------------------------------
 
 //---------Stirrer Arm---------------
-int stirrer_up = 30;   // 1 min and 11 secs pataas
-int stirrer_down = 31; // 1min and 5 secs pababa
-int stirrer_cc = 32;
-int stirrer_cw = 33;
+const int stirrer_up = 30;   // 1 min and 11 secs pataas
+const int stirrer_down = 31; // 1min and 5 secs pababa
+const int stirrer_cc = 34;
+const int stirrer_cw = 35;
+const int stirrer_speed = 36;
 // add EnA in pwm pin if using L298N motor driver
 
 //-----------------------------
@@ -182,19 +183,22 @@ const int IL_Running = 6;
 #define SERVOMIN 650  // This is the 'minimum' pulse length count (out of 4096)
 #define SERVOMAX 2350 // This is the 'maximum' pulse length count (out of 4096)
 #define SERVO_FREQ 50 // Analog servos run at ~50 Hz updates
-const byte sugarHopper = 0;
-const byte nutsHopper = 4;
-const byte arm1LDcell = 2;
-const byte arm2LDcell = 3;
+const byte sugarHopper = 6;
+const byte nutsHopper = 1;
+const byte arm1LDcell = 3;
+const byte arm2LDcell = 7;
 
-float val_sugarHopper = 1500;
-float val_nutsHopper = 1500;
-float val_arm1LDcell = 1500;
-float val_arm2LDcell = 1500;
+// intial position
+float val_sugarHopper = 1500; // 2450
+float val_nutsHopper = 1500;  // 1700
+float val_arm1LDcell = 1600;  // 2600
+float val_arm2LDcell = 1500;  // 1500
 
-float val_sugarHopperFiltered = 1500;
-float val_nutsHopperFiltered = 1500;
-float val_arm1LDcellFiltered = 1500;
+// both filtered and unfiltered must be the same value
+// 1500 means bukas
+float val_sugarHopperFiltered = 1500; // 1000 means over open ; 1500 means open ; 2000 means close
+float val_nutsHopperFiltered = 1500;  // 1500 means close ; 1600 means open?
+float val_arm1LDcellFiltered = 1600;  // 1600 means initial position ; 2600 means dispensing?
 float val_arm2LDcellFiltered = 1500;
 
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
@@ -265,10 +269,14 @@ void setup()
     //-----------------------------------------------
 
     //-----------stirrer arm------------------
-    pinMode(stirrer_up, OUTPUT);
-    pinMode(stirrer_down, OUTPUT);
-    pinMode(stirrer_cc, OUTPUT);
-    pinMode(stirrer_cw, OUTPUT);
+    // 1st L298N- 12 Volts
+    pinMode(stirrer_up, OUTPUT);   // in1
+    pinMode(stirrer_down, OUTPUT); // in2
+
+    // 2nd L298N - 24 Volts
+    pinMode(stirrer_cc, OUTPUT);    // in1
+    pinMode(stirrer_cw, OUTPUT);    // in2
+    pinMode(stirrer_speed, OUTPUT); // enA
     // put pinMode of enA & enB if using L298N
 
     digitalWrite(stirrer_up, LOW);
@@ -307,8 +315,10 @@ void setup()
     kawaliStepper.setMaxSpeed(1000);
     kawaliStepper.setAcceleration(50);
     kawaliStepper.setSpeed(200);
-    kawaliStepper.moveTo(200);
+    kawaliStepper.move(0); // kawaliStepper.moveTo(200) i changed this since no initial position indicator in actual
     //---------------------------
+
+    // intitial positions
 }
 
 void loop()
@@ -318,10 +328,10 @@ void loop()
     {
         // start event
         previousMillis = currentMillis;
-        if (int prevstate = !state)
-        {
-            debug_println(state);
-        }
+        // if (int prevstate = !state)
+        // {
+        //     // debug_println(state);
+        // }
 
         int buttonSetState = digitalRead(START_PB);
         int buttonResetState = digitalRead(STOP_PB);
@@ -373,7 +383,7 @@ void loop()
             toggleFlagStirring = 0;
 
             state = 0;
-            // debug_println("nag-stop");
+            debug_println("nag-stop");
             previousMachineMillis = currentMillis;
         }
 
@@ -381,7 +391,7 @@ void loop()
         {
             digitalWrite(WATER_LEVEL_POW, HIGH);
             state = 1;
-            debug_println(state + " yeah!");
+            debug_println(state + "yeah!");
             previousMachineMillis = currentMillis;
         }
         else if (state == 1)
@@ -398,7 +408,8 @@ void loop()
                 runOnce = 1;
             }
             digitalWrite(IL_Running, HIGH); // REvise this code
-            digitalWrite(IL_Stopped, LOW);  // REvise this code
+            digitalWrite(WATER_LEVEL_POW, HIGH);
+            digitalWrite(IL_Stopped, LOW); // REvise this code
             water_level = analogRead(WATER_LEVEL_S);
             distances = HCSR04.measureDistanceCm();
             // debug_print(distances[0]);
@@ -479,9 +490,10 @@ void loop()
             state = 4;
         }
 
-        else if (state == 4 && currentMillis - previousMachineMillis > 250)
+        else if (state == 4 && currentMillis - previousMachineMillis > 1500)
         {
             // open sugar hopper servos
+            // update: run at 1500 milis
             static int runOnce = 0;
             if (runOnce == 0)
             {
@@ -492,16 +504,16 @@ void loop()
                 lcd.print("grams");
                 runOnce = 1;
             }
-            val_sugarHopper = 756;
+            val_sugarHopper = 1500; // means open
             previousMachineMillis = currentMillis;
             int value = get_Loadcells();
             debug_println("opening sugar hopper, value: ");
             if (value > 500)
             {
-                state = 5;
             }
             lcd.setCursor(0, 1);
             lcd.print(String(value));
+            state = 5;
         }
 
         else if (state == 5 && currentMillis - previousMachineMillis > 5000)
@@ -512,7 +524,7 @@ void loop()
             lcd.setCursor(0, 1);
             lcd.print("   Closed");
 
-            val_sugarHopper = SERVOMIN;
+            val_sugarHopper = 1600; // close value
             debug_println("closed sugar hopper");
             previousMachineMillis = currentMillis;
             state = 6;
@@ -528,8 +540,8 @@ void loop()
             lcd.setCursor(0, 1);
             lcd.print("Dispensing...");
 
-            val_arm1LDcell = 756;
-            val_arm2LDcell = 756;
+            val_arm1LDcell = 1700;
+            val_arm2LDcell = 1700;
             debug_println("from hopper (sugar) to pan");
             previousMachineMillis = currentMillis;
             state = 7;
@@ -538,8 +550,8 @@ void loop()
         else if (state == 7 && currentMillis - previousMachineMillis > 5000)
         {
             // arm1LDcell go to resting pos, turn on induction cooker and set it to normal temp multitask
-            val_arm1LDcell = SERVOMIN;
-            val_arm2LDcell = SERVOMIN;
+            val_arm1LDcell = 1500;
+            val_arm2LDcell = 1500;
             lcd.clear();
             lcd.setCursor(0, 0); // Set cursor position
             lcd.print("Turning on");
@@ -564,7 +576,7 @@ void loop()
 
             digitalWrite(stirrer_down, HIGH);
             digitalWrite(stirrer_up, LOW);
-            bookmarkTime = millis() + 5000; // set clock timer for 1min 11 sec or 71000
+            bookmarkTime = millis() + 1000; // set clock timer for 1min 05 sec or 65000
             previousMachineMillis = currentMillis;
             state = 9;
         }
@@ -630,7 +642,7 @@ void loop()
             }
         }
 
-        else if (state == 12 && currentMillis - previousMachineMillis > 1000)
+        else if (state == 12 && currentMillis - previousMachineMillis > 1500)
         {
             // toggle off stirrer, pilinuts dispensing
 
@@ -646,16 +658,17 @@ void loop()
             }
 
             toggleFlagStirring = 0;
-            val_nutsHopper = 756; // open hopper
+            val_nutsHopper = 1600; // open hopper
             previousMachineMillis = currentMillis;
             int value = get_Loadcells();
             debug_println("pili nuts value: " + value);
             if (value > 500)
             {
-                state = 13;
+                // state = 13;
             }
             lcd.setCursor(0, 1);
             lcd.print(String(value));
+            state = 13;
         }
 
         else if (state == 13 && currentMillis - previousMachineMillis > 500)
@@ -668,7 +681,7 @@ void loop()
             lcd.setCursor(0, 1);
             lcd.print("   Closed");
 
-            val_nutsHopper = SERVOMIN;
+            val_nutsHopper = 1500; // close hopper
             debug_println("Closing nuts hopper");
             previousMachineMillis = currentMillis;
             state = 14;
@@ -744,25 +757,32 @@ void loop()
 
         else if (state == 18 && currentMillis - previousMachineMillis > 2000)
         {
+
             lcd.clear();
             lcd.setCursor(0, 0); // Set cursor position
-            lcd.print("Boiling 5min");
+            lcd.print("stirrer up");
             lcd.setCursor(0, 1);
             lcd.print("Timeleft: ");
+            // digitalWrite(IndCooker_ONOFF, HIGH);
 
+            // make the stirrer up again
             debug_println("resseting clock for boiling again");
             bookmarkTime = 0;
             timeleft = 0;
             stepFlagInduction_Low = 1;      // Set the temperature to low or 180 degrees
-            bookmarkTime = millis() + 5000; // set clocktime for 5 minutes. or 300000
+            bookmarkTime = millis() + 1000; // set clocktime for 1min 11 secc minutes. or 71000
             previousMachineMillis = currentMillis;
             state = 19;
         }
 
         else if (state == 19 && currentMillis - previousMachineMillis > 50)
         {
+            // make the stirrer up again
+            digitalWrite(stirrer_down, LOW);
+            digitalWrite(stirrer_up, HIGH);
+
             timeleft = bookmarkTime - millis();
-            debug_println("boiling time left: " + String(timeleft / 1000));
+            debug_println("stirrer time left: " + String(timeleft / 1000));
             toggleFlagStirring = 1; // on stirring
             lcd.setCursor(10, 1);
             lcd.print(String(timeleft / 1000) + "s");
@@ -772,7 +792,9 @@ void loop()
                 // after
                 lcd.setCursor(10, 1);
                 lcd.print("DONE");
-                toggleFlagStirring = 0; // off stirring
+                toggleFlagStirring = 0;        // off stirring
+                digitalWrite(stirrer_up, LOW); // off yung up
+                // digitalWrite(IndCooker_ONOFF, LOW);
                 state = 20;
             }
         }
@@ -786,8 +808,8 @@ void loop()
             lcd.setCursor(0, 1);
             lcd.print("Rotating...");
 
-            kawaliStepper.moveTo(1206); // dispensing position
-            kawaliStepper.setSpeed(300);
+            kawaliStepper.move(200); // dispensing position
+            kawaliStepper.setSpeed(100);
             debug_println("pan is dispensing the cooked nuts");
             previousMachineMillis = currentMillis;
             state = 21;
@@ -802,20 +824,33 @@ void loop()
             lcd.setCursor(0, 1);
             lcd.print("Resting...");
 
-            kawaliStepper.moveTo(756); // resting position
-            kawaliStepper.setSpeed(300);
+            kawaliStepper.move(-200); // resting position
+            kawaliStepper.setSpeed(100);
             debug_println("finished for now");
             previousMachineMillis = currentMillis;
             state = 22;
         }
 
-        else if (state == 22 && currentMillis - previousMillis > 1000)
+        else if (state == 22 && currentMillis - previousMachineMillis > 1000)
         {
+            lcd.clear();
+            lcd.setCursor(0, 0); // Set cursor position
+            lcd.print("Instruction sent");
+            lcd.setCursor(0, 1);
+            lcd.print("to Nano");
+
             Wire.beginTransmission(9); // Set slave address (0x70) or (9)
             Wire.write(startNano);     // Send character
             Wire.endTransmission();
 
             debug_println("Instruction sent to Nano");
+            previousMachineMillis = currentMillis;
+            state = 23;
+        }
+
+        else if (state == 23 && currentMillis - previousMachineMillis > 500)
+        {
+            debug_println("reseting states, done");
             previousMachineMillis = currentMillis;
             state = 0;
         }
@@ -826,6 +861,7 @@ void loop()
         if (toggleFlagStirring == 1 && stepFlagStirring == 0 && currentMillis - previousStirringMillis > 7500)
         {
             // set stirrer counterclockwise for 7.5 sec
+            analogWrite(stirrer_speed, 75); // set speed enA
             digitalWrite(stirrer_cc, HIGH);
             digitalWrite(stirrer_cw, LOW);
             debug_println("stiriing to counterclockwise");
@@ -842,6 +878,7 @@ void loop()
         else if (toggleFlagStirring == 1 && stepFlagStirring == 2 && currentMillis - previousStirringMillis > 7500)
         {
             // set stirrer clockwise for 7.5 sec
+            analogWrite(stirrer_speed, 15); // set speed enA
             digitalWrite(stirrer_cc, LOW);
             digitalWrite(stirrer_cw, HIGH);
             debug_println("stiriing to clockwise");
