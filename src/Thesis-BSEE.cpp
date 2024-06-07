@@ -1,3 +1,11 @@
+//
+//    FILE: Thesis-BSEE.cpp
+//  AUTHOR: James Kyle S. Balolong
+// PURPOSE: Arduino Mega for dispensing, cooking and cooling cooked pili nuts
+//     URL: https://github.com/Jamsekun/Thesis-BSEE/blob/main/src/Thesis-BSEE.cpp
+// Simulator: WOKWI, PlatformIO
+// CODE INSPIRATION: multitasking code and state machine algorithm is inspired by https://github.com/XRobots/Furby/blob/main/Code/002/002.ino
+
 #include <Arduino.h>
 #include "HX711.h"
 #include <NoDelay.h>
@@ -75,7 +83,7 @@ bool dispensing_flag = true;
 HX711 scale1;
 HX711 scale2;
 HX711 scales[2] = {scale1, scale2};
-const uint8_t dataPin[2] = {22, 24};
+const uint8_t dataPin[2] = {22, 24}; // isa lang ginagamit ko dito sa HX711 kahit naka array, 22 nlng gamitin
 const uint8_t clockPin = 23;
 // TODO you need to adjust to your calibrate numbers
 float calib[2] = {320, 559};
@@ -109,16 +117,17 @@ int toggleFlagStirring = 0; // stirring arm toggle sequence. 1 means On, 0 means
 
 //-----------INDUCTION COOKER---------------
 const int IndCooker_ONOFF = 7;
+// tinanggal na to nila:
 int IndCooker_FUNC = 8;
 int IndCooker_negaTEMP = 9;
 int IndCooker_posiTEMP = 10;
 //--------------------------------
 
 //---------Stirrer Arm---------------
-const int stirrer_up = 30;   // 1 min and 11 secs pataas
-const int stirrer_down = 31; // 1min and 5 secs pababa
-const int stirrer_cc = 34;
-const int stirrer_cw = 35;
+const int stirrer_up = 30;   // 1 min and 11 secs pataas, test polarity of the motor first
+const int stirrer_down = 31; // 1 min and 5 secs pababa, test polarity of the motor first
+const int stirrer_cc = 34;   // in1
+const int stirrer_cw = 35;   // in2
 const int stirrer_speed = 36;
 // add EnA in pwm pin if using L298N motor driver
 
@@ -219,6 +228,9 @@ const int targetPosition = 1000;
 const int defaultPosition = 0;
 AccelStepper kawaliStepper(motorInterfaceType, stpprPANstep, stpprPANdir);
 //-----------------------------
+
+// SCL - 20
+// SDA - 21
 
 void setup()
 {
