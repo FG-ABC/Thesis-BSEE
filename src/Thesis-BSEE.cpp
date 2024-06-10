@@ -15,6 +15,7 @@
 #include <Adafruit_PWMServoDriver.h>
 #include <LiquidCrystal_I2C.h>
 #include "AccelStepper.h"
+#include <Servo.h>
 
 #define DEBUG // Uncomment to disable debugging printing
 #ifdef DEBUG
@@ -60,6 +61,16 @@ unsigned long previousStirringMillis = 0;
 int state = 0; // stage of automation //original position and number is -1
 //-------------------------------
 
+//----------Servo Params------------------
+#define servoPin1 10
+#define servoPin2 11
+#define servoPin3 12
+#define servoPin4 13
+
+Servo WeighingServo;
+Servo PiliServo;
+Servo StoveServo;
+Servo SugarServo;
 //----------MACHINE PROCESS STATUS------------------
 // this determines the current action of the machine
 enum Machine_process
@@ -99,7 +110,7 @@ uint32_t count = 0;
 // void water_dispensing();
 void sugarHopper_servo();
 void loadCell_servos();
-void panRotation();
+// void panRotation();
 //-------------
 
 //--------- FLAGS-----------------------
@@ -125,10 +136,10 @@ int IndCooker_posiTEMP = 10;
 //--------------------------------
 
 //---------Stirrer Arm---------------
-const int stirrer_up = 30;   // 1 min and 11 secs pataas, test polarity of the motor first
-const int stirrer_down = 31; // 1 min and 5 secs pababa, test polarity of the motor first
-const int stirrer_cc = 34;   // in1
-const int stirrer_cw = 35;   // in2
+const int stirrer_cw = 38;   // 1 min and 11 secs pataas, test polarity of the motor first
+const int stirrer_cc = 39;   // 1 min and 5 secs pababa, test polarity of the motor first
+const int stirrer_down = 34; // in1
+const int stirrer_up = 35;   // in2
 const int stirrer_speed = 36;
 // add EnA in pwm pin if using L298N motor driver
 
@@ -305,6 +316,12 @@ void setup()
     pwm.begin();
     pwm.setOscillatorFrequency(27000000);
     pwm.setPWMFreq(SERVO_FREQ);
+
+    WeighingServo.attach(servoPin1);
+    PiliServo.attach(servoPin4);
+    StoveServo.attach(servoPin3);
+    SugarServo.attach(servoPin2);
+
     //--------------------------------
 
     //-------------STEPPER MOTORS--------
@@ -370,9 +387,7 @@ void loop()
             digitalWrite(IL_Stopped, LOW);
             bookmarkTime = 0; // reset timers to 0
             timeleft = 0;
-            stepFlagInduction_Low = 0; // reset to initial position
-            stepFlagInduction_Med = 0;
-            toggleFlagStirring = 0;
+            StoveServo.write(0);
 
             // state = 0;
             previousMachineMillis = currentMillis;
@@ -381,24 +396,30 @@ void loop()
         // State 0, presetup process
         else if (state == 0 && machineOnStatus == false)
         {
+
             debug_println("State 0");
-            delay(5000);
-            // Set the target position:
-            kawaliStepper.moveTo(-50);
-            // Run to target position with set speed and acceleration/deceleration:
-            kawaliStepper.runToPosition();
-            delay(10000);
+            StoveServo.write(0);
+            SugarServo.write(0);
+            digitalWrite(stirrer_up, HIGH);
+            digitalWrite(stirrer_down, LOW);
+            digitalWrite(stirrer_speed, HIGH);
+            // StoveServo.write(0);
+            // delay(5000);
+            // StoveServo.write(90);
+            // delay(5000);
 
-            // Move back to zero:
-            kawaliStepper.moveTo(0);
-            kawaliStepper.runToPosition();
-
-            delay(10000);
-            debug_println(boolean(kawaliStepper.isRunning()));
-            debug_println(kawaliStepper.distanceToGo());
-            debug_println(kawaliStepper.speed());
-            previousMachineMillis = currentMillis;
-            delay(5000);
+            // for (int angle = 0; angle <= 45; angle += 1)
+            //
+            //     WeighingServo.write(angle);
+            //     delay(15);
+            // }
+            // delay(5000);
+            // for (int angle = 45; angle >= 0; angle -= 1)
+            // {
+            //     WeighingServo.write(angle);
+            //     delay(15);
+            // }
+            // delay(5000);
         }
 
         // State 1, Running - HIGH, Stopped - LOW
@@ -408,7 +429,7 @@ void loop()
             digitalWrite(IL_Running, LOW);
             digitalWrite(IL_Stopped, HIGH);
             water_level = analogRead(WATER_LEVEL_S);
-            // debug_println(water_level);
+            debug_println(water_level);
             distances = HCSR04.measureDistanceCm();
             bool tuloy = true;
             if (distances[0] >= reqSugarLevel)
@@ -443,9 +464,9 @@ void loop()
             if (tuloy)
             {
                 debug_println("tuloy");
-                // state = 2;
+                state = 2;
             }
-
+            delay(1000);
             previousMachineMillis = currentMillis;
         }
 
@@ -464,6 +485,7 @@ void loop()
         {
             debug_println("State 3");
             digitalWrite(WaterPump, LOW);
+            StoveServo.write(90);
             debug_println("WaterPump is closed");
             previousMachineMillis = currentMillis;
             state = 4;
@@ -473,62 +495,28 @@ void loop()
         else if (state == 4 && currentMillis - previousMachineMillis > 1500)
         {
             // open sugar hopper servos
-            debug_println("State 4");
-            val_sugarHopper = 1500; // means open
+            SugarServo.write(105);
             previousMachineMillis = currentMillis;
-            int value2 = get_Loadcells();
-            debug_println("opening sugar hopper, value: " + String(value2));
-            if (value2 > 500)
-            {
-                state = 5;
-            }
+            state = 5;
         }
 
-        // State 5, Close sugar hopper after 5s
-        else if (state == 5 && currentMillis - previousMachineMillis > 5000)
+        // State 5, Close sugar hopper after 2s
+        else if (state == 5 && currentMillis - previousMachineMillis > 2000)
         {
             debug_println("State 5");
-            val_sugarHopper = 1600; // close value
-            debug_println("closed sugar hopper");
-            previousMachineMillis = currentMillis;
-            state = 6;
-        }
-
-        // State 6, Open load cell servos after 5s
-        else if (state == 6 && currentMillis - previousMachineMillis > 5000)
-        {
-            // the servo should be intialized in resting position
-            // the servo will go down now, dispensing sugar to cooking pan
-            debug_println("State 6");
-            val_arm1LDcell = 1700;
-            val_arm2LDcell = 1700;
-            debug_println("from hopper (sugar) to pan");
-            previousMachineMillis = currentMillis;
-            state = 7;
-        }
-
-        // State 7, Close load cell servos after 5s
-        else if (state == 7 && currentMillis - previousMachineMillis > 5000)
-        {
-            // arm1LDcell go to resting pos, turn on induction cooker and set it to normal temp multitask
-            debug_println("State 7");
-            val_arm1LDcell = 1500;
-            val_arm2LDcell = 1500;
-
-            debug_println("turn on induction cooker");
-            stepFlagInduction_Med = 1; // start induction cooker sequence
+            SugarServo.write(0);
             previousMachineMillis = currentMillis;
             state = 8;
         }
 
-        // State 8, Turn off induction cooker after 5s and put arm down. TODO: Adjust time
+        // State 8,  TODO: Adjust time
         else if (state == 8 && currentMillis - previousMachineMillis > 5000)
         {
             // let stirrer arm go down, adjust the time on testing, initialize it to be upward
             debug_println("State 8");
-            digitalWrite(stirrer_down, HIGH);
+            // digitalWrite(stirrer_down, HIGH);
             digitalWrite(stirrer_up, LOW);
-            bookmarkTime = millis() + 1000; // set clock timer for 1min 05 sec or 65000
+            bookmarkTime = millis() + 0000; // set clock timer for 1min 05 sec or 65000
             previousMachineMillis = currentMillis;
             state = 9;
         }
@@ -537,16 +525,15 @@ void loop()
         else if (state == 9 && currentMillis - previousMachineMillis > 50)
         {
             debug_println("State 9");
-            digitalWrite(stirrer_cc, HIGH);
-            digitalWrite(stirrer_cw, LOW);
             timeleft = bookmarkTime - millis();
             debug_println("down timeleft: " + String(timeleft / 1000));
             if (timeleft <= 0)
             {
-                toggleFlagStirring = 1;
                 digitalWrite(stirrer_down, LOW);
                 previousMachineMillis = currentMillis;
                 state = 10;
+                digitalWrite(stirrer_cc, HIGH);
+                digitalWrite(stirrer_cw, LOW);
             }
             previousMachineMillis = currentMillis;
         }
@@ -558,8 +545,8 @@ void loop()
             debug_println("resseting clock");
             bookmarkTime = 0;
             timeleft = 0;
-            bookmarkTime = millis() + 12000; // set clocktime for 2 minutes. or 120000
-            toggleFlagStirring = 1;
+            bookmarkTime = millis() + 180000; // set clocktime for 2 minutes. or 120000
+
             previousMachineMillis = currentMillis;
             state = 11;
         }
@@ -573,7 +560,7 @@ void loop()
             previousMachineMillis = currentMillis;
             if (timeleft <= 0)
             {
-                toggleFlagStirring = 0; // off stirring
+                digitalWrite(stirrer_cc, LOW); // off stirring
                 state = 12;
             }
         }
@@ -582,48 +569,18 @@ void loop()
         else if (state == 12 && currentMillis - previousMachineMillis > 1500)
         {
             debug_println("State 12");
-            toggleFlagStirring = 0;
-            val_nutsHopper = 1600; // open hopper
+            PiliServo.write(105); // open nuts hopper
             previousMachineMillis = currentMillis;
-            int value = get_Loadcells();
-            debug_println("pili nuts value: " + value);
-            if (value > 500)
-            {
-                state = 13;
-            }
+            state = 13;
         }
 
         // State 13, Close nuts hopper after 0.5s
-        else if (state == 13 && currentMillis - previousMachineMillis > 500)
+        else if (state == 13 && currentMillis - previousMachineMillis > 2000)
         {
             // close pili nuts hopper, drop it to pan
             debug_println("State 13");
-            val_nutsHopper = 1500; // close hopper
+            PiliServo.write(0);
             debug_println("Closing nuts hopper");
-            previousMachineMillis = currentMillis;
-            state = 14;
-        }
-
-        // State 14, Open load cell servos after 5s
-        else if (state == 14 && currentMillis - previousMachineMillis > 5000)
-        {
-            // the servo should be intialized in resting position
-            // the servo will go down now, dispensing nuts to cooking pan
-            debug_println("State 14");
-            val_arm1LDcell = 756;
-            val_arm2LDcell = 756;
-            debug_println("from hopper (nuts) to pan");
-            previousMachineMillis = currentMillis;
-            state = 15;
-        }
-
-        else if (state == 15 && currentMillis - previousMachineMillis > 5000)
-        {
-            // servo arm to resting position
-            debug_println("State 15");
-            val_arm1LDcell = SERVOMIN;
-            val_arm2LDcell = SERVOMIN;
-            debug_println("LD cell arm back to resting pos");
             previousMachineMillis = currentMillis;
             state = 16;
         }
@@ -634,7 +591,7 @@ void loop()
             debug_println("resseting clock for boiling again");
             bookmarkTime = 0;
             timeleft = 0;
-            bookmarkTime = millis() + 18000; // set clocktime for 3 minutes. or 180000
+            bookmarkTime = millis() + 120000; // set clocktime for 3 minutes. or 180000
             previousMachineMillis = currentMillis;
             state = 17;
         }
@@ -645,11 +602,11 @@ void loop()
             // during
             timeleft = bookmarkTime - millis();
             debug_println("boiling time left: " + String(timeleft / 1000));
-            toggleFlagStirring = 1;
+            digitalWrite(stirrer_cc, HIGH);
             previousMachineMillis = currentMillis;
             if (timeleft <= 0)
             {
-                toggleFlagStirring = 0;
+                StoveServo.write(90);
                 state = 18;
             }
         }
@@ -660,9 +617,8 @@ void loop()
             // make the stirrer up again
             debug_println("resseting clock for boiling again");
             bookmarkTime = 0;
-            timeleft = 0;
-            stepFlagInduction_Low = 1;      // Set the temperature to low or 180 degrees
-            bookmarkTime = millis() + 1000; // set clocktime for 1min 11 secc minutes. or 71000
+            timeleft = 0;                      // Set the temperature to low or 180 degrees
+            bookmarkTime = millis() + 4200000; // set clocktime for 1min 11 secc minutes. or 71000
             previousMachineMillis = currentMillis;
             state = 19;
         }
@@ -671,19 +627,42 @@ void loop()
         {
             debug_println("State 19");
             // make the stirrer up again
-            digitalWrite(stirrer_down, LOW);
-            digitalWrite(stirrer_up, HIGH);
 
             timeleft = bookmarkTime - millis();
             debug_println("stirrer time left: " + String(timeleft / 1000));
-            toggleFlagStirring = 1; // on stirring
             previousMachineMillis = currentMillis;
             if (timeleft <= 0)
             {
+                digitalWrite(stirrer_cc, LOW);
+                digitalWrite(stirrer_up, HIGH); // off yung up
+                state = 41;
+            }
+        }
 
-                toggleFlagStirring = 0;        // off stirring
-                digitalWrite(stirrer_up, LOW); // off yung up
-                state = 20;
+        else if (state == 41 && currentMillis - previousMachineMillis > 2000)
+        {
+            debug_println("State 18");
+            // make the stirrer up again
+            debug_println("resseting clock for boiling again");
+            bookmarkTime = 0;
+            timeleft = 0;                      // Set the temperature to low or 180 degrees
+            bookmarkTime = millis() + 2300000; // set clocktime for 1min 11 secc minutes. or 71000
+            previousMachineMillis = currentMillis;
+            state = 42;
+        }
+
+        else if (state == 42 && currentMillis - previousMachineMillis > 50)
+        {
+            debug_println("State 19");
+            // make the stirrer up again
+            digitalWrite(stirrer_up, HIGH);
+            timeleft = bookmarkTime - millis();
+            debug_println("stirrer time left: " + String(timeleft / 1000));
+            previousMachineMillis = currentMillis;
+            if (timeleft <= 0)
+            {
+                digitalWrite(stirrer_up, LOW);
+                state = 0;
             }
         }
 
@@ -692,15 +671,16 @@ void loop()
             debug_println("State 20");
             // rotate the pan to the hopper below
             debug_println("rotating pan to hopper below");
-            kawaliStepper.setSpeed(200);
-            kawaliStepper.move(200);
-
+            // Set the target position:
+            kawaliStepper.moveTo(-50);
+            // Run to target position with set speed and acceleration/deceleration:
+            kawaliStepper.runToPosition();
             debug_println(boolean(kawaliStepper.isRunning()));
             debug_println(kawaliStepper.distanceToGo());
             debug_println(kawaliStepper.speed());
             previousMachineMillis = currentMillis;
             machineOnStatus = false;
-            // state = ;
+            state = 21;
         }
 
         else if (state == 21 && currentMillis - previousMachineMillis > 5000)
@@ -708,11 +688,16 @@ void loop()
 
             debug_println("State 21");
             // rotate the pan to its resting position.
-            kawaliStepper.move(-200); // resting position
-            kawaliStepper.setSpeed(100);
+            delay(10000);
+
+            // Move back to zero:
+            kawaliStepper.moveTo(0);
+            kawaliStepper.runToPosition();
+
+            delay(10000);
             debug_println("finished for now");
             previousMachineMillis = currentMillis;
-            state = 22;
+            state = 0;
         }
 
         else if (state == 22 && currentMillis - previousMachineMillis > 1000)
