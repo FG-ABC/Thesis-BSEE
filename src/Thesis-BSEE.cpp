@@ -33,9 +33,9 @@
 */
 
 //----------USER INTERFACE-------------------
-unsigned int reqPilinutsLevel = 17;
+unsigned int reqPilinutsLevel = 15;
 int reqTubigLevel = 200;
-unsigned int reqSugarLevel = 17; // required sugar level
+unsigned int reqSugarLevel = 15; // required sugar level
 
 //---------------------------------
 
@@ -57,7 +57,7 @@ unsigned long previousStirringMillis = 0;
 
 //--------------automation-------------
 // FG Set state here
-int state = 2; // stage of automation //original position and number is -1
+int state = 0; // stage of automation //original position and number is -1
 //-------------------------------
 
 //----------MACHINE PROCESS STATUS------------------
@@ -94,7 +94,7 @@ uint32_t count = 0;
 // unsigned int UltraS1();
 // unsigned int UltraS2();
 // void waterLevel();
-int machine_buttons();
+// int machine_buttons();
 // int dispensing_specificprocess(int dispensing_switch);
 // void water_dispensing();
 void sugarHopper_servo();
@@ -178,9 +178,9 @@ unsigned long prevTime_StopPB = 0;
 //--------------------------------------------------
 
 //------------------LIGHT INDICATORS-----------------
-const int IL_NoSugar = 2;
-const int IL_NoNuts = 3;
-const int IL_NoWater = 4;
+const int IL_NoSugar = 4;
+const int IL_NoNuts = 2;
+const int IL_NoWater = 3;
 const int IL_Stopped = 5;
 const int IL_Running = 6;
 //---------------------------------------
@@ -220,10 +220,10 @@ float filter(float prevValue, float currentValue, int filter)
 //--------------STEPPER MOTORS-------------------
 const int stpprPANstep = 16;
 const int stpprPANdir = 17;
-#define motorInterfaceType 1
+const int stpprPANen = 18;
 const int targetPosition = 1000;
 const int defaultPosition = 0;
-AccelStepper kawaliStepper(motorInterfaceType, stpprPANstep, stpprPANdir);
+AccelStepper kawaliStepper(AccelStepper::DRIVER, stpprPANstep, stpprPANdir);
 //-----------------------------
 
 // SCL - 20
@@ -272,6 +272,9 @@ void setup()
     pinMode(stirrer_up, OUTPUT);   // in1
     pinMode(stirrer_down, OUTPUT); // in2
 
+    // -==tiamng
+    pinMode(stpprPANstep, OUTPUT);
+
     // 2nd L298N - 24 Volts
     pinMode(stirrer_cc, OUTPUT);    // in1
     pinMode(stirrer_cw, OUTPUT);    // in2
@@ -308,10 +311,12 @@ void setup()
     //--------------------------------
 
     //-------------STEPPER MOTORS--------
-    kawaliStepper.setMaxSpeed(1000);
-    kawaliStepper.setAcceleration(50);
+    kawaliStepper.setEnablePin(18);
+    kawaliStepper.setMaxSpeed(200);
+    kawaliStepper.setAcceleration(100);
     kawaliStepper.setSpeed(200);
-    kawaliStepper.move(0); // kawaliStepper.moveTo(200) i changed this since no initial position indicator in actual
+    kawaliStepper.enableOutputs();
+    // kawaliStepper.move(0); // kawaliStepper.moveTo(200) i changed this since no initial position indicator in actual
     //---------------------------
 }
 
@@ -322,7 +327,6 @@ void loop()
     {
         // start event
         previousMillis = currentMillis;
-
         int buttonSetState = digitalRead(START_PB);
         int buttonResetState = digitalRead(STOP_PB);
 
@@ -331,7 +335,7 @@ void loop()
         // State 1 if start button is pressed
         if (buttonSetState == LOW && buttonStartPressed == 0)
         {
-            debug_println("nag-start ako");
+            // debug_println("nag-start ako");
             state = 1;
             buttonStartPressed = 1;
         }
@@ -339,6 +343,7 @@ void loop()
         else if (buttonSetState == HIGH && buttonStartPressed == 1)
         {
             delay(250);
+            debug_println("nag-start ako");
             buttonStartPressed = 0;
         }
 
@@ -354,6 +359,7 @@ void loop()
         else if (buttonResetState == HIGH && buttonStopPressed == 1)
         {
             delay(250);
+            debug_println("nag-stop ako");
             buttonStopPressed = 0;
         }
 
@@ -362,11 +368,11 @@ void loop()
         {
             debug_println("State -1");
             // stop process is ran once.
-            digitalWrite(IL_NoSugar, LOW);
-            digitalWrite(IL_NoWater, LOW);
-            digitalWrite(IL_NoNuts, LOW);
-            digitalWrite(IL_Running, LOW);
-            digitalWrite(IL_Stopped, HIGH);
+            digitalWrite(IL_NoSugar, HIGH);
+            digitalWrite(IL_NoWater, HIGH);
+            digitalWrite(IL_NoNuts, HIGH);
+            digitalWrite(IL_Running, HIGH);
+            digitalWrite(IL_Stopped, LOW);
             bookmarkTime = 0; // reset timers to 0
             timeleft = 0;
             stepFlagInduction_Low = 0; // reset to initial position
@@ -374,39 +380,33 @@ void loop()
             toggleFlagStirring = 0;
 
             // state = 0;
-            debug_println("nag-stop ako");
             previousMachineMillis = currentMillis;
         }
 
         // State 0, presetup process
-        else if (state == 0 && machineOnStatus == true)
+        else if (state == 0 && machineOnStatus == false)
         {
-            state = 1;
+            debug_println("State 0");
+            digitalWrite(stirrer_up, LOW);
+            digitalWrite(stirrer_down, HIGH);
             previousMachineMillis = currentMillis;
+            delay(5000);
         }
 
         // State 1, Running - HIGH, Stopped - LOW
         else if (state == 1)
         {
             debug_println("State 1");
-            digitalWrite(IL_Running, HIGH);
-            digitalWrite(IL_Stopped, LOW);
+            digitalWrite(IL_Running, LOW);
+            digitalWrite(IL_Stopped, HIGH);
             water_level = analogRead(WATER_LEVEL_S);
+            // debug_println(water_level);
             distances = HCSR04.measureDistanceCm();
-            debug_print(distances[0]);
-            debug_print(distances[1]);
-            debug_println(water_level);
-
-            // Condition to move to dispensing process
-            if (distances[1] <= 17 && distances[0] <= 17 && water_level > 200)
-            {
-                state = 2; // move to dispensing process
-            }
-
+            bool tuloy = true;
             if (distances[0] >= reqSugarLevel)
             {
                 digitalWrite(IL_NoSugar, HIGH);
-                debug_println("WALANG LAMAN ASUKAL");
+                tuloy = false;
             }
             else
             {
@@ -416,7 +416,7 @@ void loop()
             if (distances[1] >= reqPilinutsLevel)
             {
                 digitalWrite(IL_NoNuts, HIGH);
-                debug_println("WALANG LAMAN NUTS");
+                tuloy = false;
             }
             else
             {
@@ -426,12 +426,18 @@ void loop()
             if (water_level <= 200)
             {
                 digitalWrite(IL_NoWater, HIGH);
+                tuloy = false;
             }
             else
             {
                 digitalWrite(IL_NoWater, LOW);
-                debug_println("WALANG LAMAN WATER");
             }
+            if (tuloy)
+            {
+                debug_println("tuloy");
+                // state = 2;
+            }
+
             previousMachineMillis = currentMillis;
         }
 
@@ -678,11 +684,15 @@ void loop()
             debug_println("State 20");
             // rotate the pan to the hopper below
             debug_println("rotating pan to hopper below");
-            kawaliStepper.move(400); // resting position
-            kawaliStepper.setSpeed(100);
+            kawaliStepper.setSpeed(200);
+            kawaliStepper.move(200);
+
+            debug_println(boolean(kawaliStepper.isRunning()));
+            debug_println(kawaliStepper.distanceToGo());
+            debug_println(kawaliStepper.speed());
             previousMachineMillis = currentMillis;
             machineOnStatus = false;
-            state = 21;
+            // state = ;
         }
 
         else if (state == 21 && currentMillis - previousMachineMillis > 5000)
@@ -935,7 +945,7 @@ void loop()
     pwm.writeMicroseconds(arm1LDcell, val_arm1LDcellFiltered);
     pwm.writeMicroseconds(arm2LDcell, val_arm2LDcellFiltered);
     // Delay function
-    delay(5000);
+    // delay(5000);
 }
 
 int get_Loadcells()
