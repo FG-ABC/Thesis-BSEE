@@ -53,7 +53,7 @@ unsigned long previousMachineMillis = 0;
 unsigned long previousInductionMedMillis = 0;
 unsigned long previousInductionLowMillis = 0;
 unsigned long previousStirringMillis = 0;
-//------------------------
+//------------------------sat
 
 //--------------automation-------------
 // FG Set state here
@@ -218,8 +218,8 @@ float filter(float prevValue, float currentValue, int filter)
 //----------------------------------------------
 
 //--------------STEPPER MOTORS-------------------
-const int stpprPANstep = 16;
-const int stpprPANdir = 17;
+const int stpprPANstep = 8;
+const int stpprPANdir = 9;
 const int stpprPANen = 18;
 const int targetPosition = 1000;
 const int defaultPosition = 0;
@@ -272,9 +272,6 @@ void setup()
     pinMode(stirrer_up, OUTPUT);   // in1
     pinMode(stirrer_down, OUTPUT); // in2
 
-    // -==tiamng
-    pinMode(stpprPANstep, OUTPUT);
-
     // 2nd L298N - 24 Volts
     pinMode(stirrer_cc, OUTPUT);    // in1
     pinMode(stirrer_cw, OUTPUT);    // in2
@@ -311,11 +308,9 @@ void setup()
     //--------------------------------
 
     //-------------STEPPER MOTORS--------
-    kawaliStepper.setEnablePin(18);
-    kawaliStepper.setMaxSpeed(200);
-    kawaliStepper.setAcceleration(100);
-    kawaliStepper.setSpeed(200);
-    kawaliStepper.enableOutputs();
+    // kawaliStepper.setEnablePin();
+    kawaliStepper.setMaxSpeed(12);
+    kawaliStepper.setAcceleration(1000);
     // kawaliStepper.move(0); // kawaliStepper.moveTo(200) i changed this since no initial position indicator in actual
     //---------------------------
 }
@@ -387,8 +382,21 @@ void loop()
         else if (state == 0 && machineOnStatus == false)
         {
             debug_println("State 0");
-            digitalWrite(stirrer_up, LOW);
-            digitalWrite(stirrer_down, HIGH);
+            delay(5000);
+            // Set the target position:
+            kawaliStepper.moveTo(-50);
+            // Run to target position with set speed and acceleration/deceleration:
+            kawaliStepper.runToPosition();
+            delay(10000);
+
+            // Move back to zero:
+            kawaliStepper.moveTo(0);
+            kawaliStepper.runToPosition();
+
+            delay(10000);
+            debug_println(boolean(kawaliStepper.isRunning()));
+            debug_println(kawaliStepper.distanceToGo());
+            debug_println(kawaliStepper.speed());
             previousMachineMillis = currentMillis;
             delay(5000);
         }
