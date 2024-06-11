@@ -1,10 +1,13 @@
 //
 //    FILE: Thesis-BSEE.cpp
-//  AUTHOR: James Kyle S. Balolong
+//  AUTHOR: FG D. Hernandez
 // PURPOSE: Arduino Mega for dispensing, cooking and cooling cooked pili nuts
-//     URL: https://github.com/Jamsekun/Thesis-BSEE/blob/main/src/Thesis-BSEE.cpp
-// Simulator: WOKWI, PlatformIO
+//     URL: https://github.com/FG-ABC/Thesis-BSEE
+// Simulator: PlatformIO
 // CODE INSPIRATION: multitasking code and state machine algorithm is inspired by https://github.com/XRobots/Furby/blob/main/Code/002/002.ino
+//
+// This code is an adaptation of an original code made by James B. at https://github.com/Jamsekun/Thesis-BSEE/blob/main/src/Thesis-BSEE.cpp
+//
 
 #include <Arduino.h>
 #include "HX711.h"
@@ -26,29 +29,19 @@
 #define debug_println(x) // Empty statement
 #endif
 
-//-------------address------------------- (IDK)
-/*
-0x27: LCD
-0x40: Servo driver
-0x70: nano
-*/
-
 //----------USER INTERFACE-------------------
-unsigned int reqPilinutsLevel = 15;
+unsigned int reqPilinutsLevel = 15; // required pili nuts level in cm
 int reqTubigLevel = 200;
-unsigned int reqSugarLevel = 15; // required sugar level
+unsigned int reqSugarLevel = 15; // required sugar level in cm
 
-//-----------TIME MILLIS ----------------- (IDK)
+//-----------TIME MILLIS -----------------
 unsigned long currentMillis;
 unsigned long previousMillis = 0; // set up timer for whole machine
-const unsigned long interval = 20;
+
 unsigned long bookmarkTime; // capture starting time
 long timeleft;              // time left as it counts down
 
 unsigned long previousMachineMillis = 0;
-unsigned long previousInductionMedMillis = 0;
-unsigned long previousInductionLowMillis = 0;
-unsigned long previousStirringMillis = 0;
 //------------------------sat
 
 //--------------automation-------------
@@ -86,7 +79,6 @@ double *distances;
 // Define the pins
 const int WATER_LEVEL_S = A0; // Analog pin for water level sensor
 // Define variables
-unsigned long lastStateTime = 0;
 int water_level = 0;
 
 //-----------------WATER DISPENSING--------------------
@@ -97,7 +89,6 @@ const int WaterPump = 26;
 const int START_PB = 29;
 const int STOP_PB = 28;
 unsigned long debounceDelay_PB = 50; // Debounce delay in milliseconds
-bool machineOnStatus = false;
 bool buttonStartPressed = false;
 bool buttonStopPressed = false;
 unsigned long prevTime_StartPB = 0;
@@ -105,9 +96,9 @@ unsigned long prevTime_StopPB = 0;
 //--------------------------------------------------
 
 //------------------LIGHT INDICATORS-----------------
-const int IL_NoSugar = 4;
 const int IL_NoNuts = 2;
 const int IL_NoWater = 3;
+const int IL_NoSugar = 4;
 const int IL_Stopped = 5;
 const int IL_Running = 6;
 //---------------------------------------
@@ -115,14 +106,24 @@ const int IL_Running = 6;
 //--------------STEPPER MOTORS-------------------
 const int stpprPANstep = 8;
 const int stpprPANdir = 9;
-const int stpprPANen = 18;
-const int targetPosition = 1000;
-const int defaultPosition = 0;
 AccelStepper kawaliStepper(AccelStepper::DRIVER, stpprPANstep, stpprPANdir);
 //-----------------------------
 
-// SCL - 20
-// SDA - 21
+//--------------STEPPER MOTORS-------------------
+const int stpprTwostep = 40;
+const int stpprTwodir = 41;
+AccelStepper twoStepper(AccelStepper::DRIVER, stpprTwostep, stpprTwodir);
+//-----------------------------
+
+// ------------SERVO STATES--------------------
+#define HopperOpen 180
+#define HopperClose 125
+#define StoveOpen 90
+#define StoveClose 0
+#define PiliOpen 90
+#define PiliClose 0
+#define SugarOpen 0
+#define SugarClose 105
 
 void setup()
 {
@@ -138,10 +139,6 @@ void setup()
     //-----------ULTRASONIC-------------------
     HCSR04.begin(triggerPin, echoPins, echoCount);
     //-------------------------------------
-
-    //--------------I2C Communication----------
-    Wire.begin(); // Start I2C communication as master
-    //-----------------------------------
 
     //-----------stirrer arm------------------
     // 1st L298N- 12 Volts
@@ -178,9 +175,9 @@ void setup()
     //-----------------------------------------------
 
     //------------------SERVO MOTORS-----------
-    PiliServo.attach(servoPin4);
+    PiliServo.attach(servoPin2);
     StoveServo.attach(servoPin3);
-    SugarServo.attach(servoPin2);
+    SugarServo.attach(servoPin4);
     HopperServo.attach(servoPin1);
 
     //--------------------------------
@@ -188,6 +185,8 @@ void setup()
     //-------------STEPPER MOTORS--------
     kawaliStepper.setMaxSpeed(12);
     kawaliStepper.setAcceleration(1000);
+    twoStepper.setMaxSpeed(200);
+    twoStepper.setAcceleration(1000);
     //---------------------------
 }
 
@@ -200,8 +199,6 @@ void loop()
         previousMillis = currentMillis;
         int buttonSetState = digitalRead(START_PB);
         int buttonResetState = digitalRead(STOP_PB);
-
-        // start button logic
 
         // State 1 if start button is pressed
         if (buttonSetState == LOW && buttonStartPressed == 0)
@@ -235,10 +232,10 @@ void loop()
         }
 
         // State - 1, stop process
-        if (state == -1 && machineOnStatus == false)
+        if (state == -1)
         {
             debug_println("State -1");
-            // stop process is ran once.
+            //  stop process is ran once.
             digitalWrite(IL_NoSugar, HIGH);
             digitalWrite(IL_NoWater, HIGH);
             digitalWrite(IL_NoNuts, HIGH);
@@ -246,39 +243,32 @@ void loop()
             digitalWrite(IL_Stopped, LOW);
             bookmarkTime = 0; // reset timers to 0
             timeleft = 0;
-            StoveServo.write(0);
+            StoveServo.write(StoveClose);
+            HopperServo.write(HopperClose);
+            SugarServo.write(180);
+            PiliServo.write(0);
 
             // state = 0;
             previousMachineMillis = currentMillis;
         }
 
         // State 0, ISO process
-        else if (state == 0 && machineOnStatus == false)
+        else if (state == 0)
         {
 
             debug_println("State 0");
-            StoveServo.write(0);
-            SugarServo.write(0);
-            digitalWrite(stirrer_up, HIGH);
-            digitalWrite(stirrer_down, LOW);
-            digitalWrite(stirrer_speed, HIGH);
-            // StoveServo.write(0);
-            // delay(5000);
-            // StoveServo.write(90);
-            // delay(5000);
+            StoveServo.write(StoveClose);
+            HopperServo.write(HopperClose);
+            SugarServo.write(180);
+            PiliServo.write(0);
 
-            // for (int angle = 0; angle <= 45; angle += 1)
-            //
-            //     WeighingServo.write(angle);
-            //     delay(15);
-            // }
-            // delay(5000);
-            // for (int angle = 45; angle >= 0; angle -= 1)
-            // {
-            //     WeighingServo.write(angle);
-            //     delay(15);
-            // }
-            // delay(5000);
+            HopperServo.write(HopperOpen);
+            delay(3000);
+            HopperServo.write(HopperClose);
+            delay(3000);
+            twoStepper.move(360);
+            twoStepper.runToPosition();
+            delay(3000);
         }
 
         // State 1, Running - HIGH, Stopped - LOW
@@ -340,12 +330,14 @@ void loop()
         }
 
         // State 3, Turn water pump off after 4.75s
-        else if (state == 3 && currentMillis - previousMachineMillis > 4750)
+        // turn stove on
+        else if (state == 3 && currentMillis - previousMachineMillis > 4000)
         {
             debug_println("State 3");
             digitalWrite(WaterPump, LOW);
-            StoveServo.write(90);
+            StoveServo.write(StoveOpen);
             debug_println("WaterPump is closed");
+            debug_println("Stove is on");
             previousMachineMillis = currentMillis;
             state = 4;
         }
@@ -354,25 +346,25 @@ void loop()
         else if (state == 4 && currentMillis - previousMachineMillis > 1500)
         {
             // open sugar hopper servos
-            SugarServo.write(105);
+            SugarServo.write(SugarOpen);
             previousMachineMillis = currentMillis;
             state = 5;
         }
 
         // State 5, Close sugar hopper after 2s
-        else if (state == 5 && currentMillis - previousMachineMillis > 2000)
+        else if (state == 5 && currentMillis - previousMachineMillis > 1000)
         {
             debug_println("State 5");
-            SugarServo.write(0);
+            SugarServo.write(SugarClose);
             previousMachineMillis = currentMillis;
-            state = 8;
+            state = 6;
         }
 
-        // State 8,  TODO: Adjust time
-        else if (state == 8 && currentMillis - previousMachineMillis > 5000)
+        // State 6,  TODO: Used for lowering the stirrer arm
+        else if (state == 6 && currentMillis - previousMachineMillis > 5000)
         {
             // let stirrer arm go down, adjust the time on testing, initialize it to be upward
-            debug_println("State 8");
+            debug_println("State 6");
             // digitalWrite(stirrer_down, HIGH);
             digitalWrite(stirrer_up, LOW);
             bookmarkTime = millis() + 0000; // set clock timer for 1min 05 sec or 65000
@@ -419,7 +411,6 @@ void loop()
             previousMachineMillis = currentMillis;
             if (timeleft <= 0)
             {
-                digitalWrite(stirrer_cc, LOW); // off stirring
                 state = 12;
             }
         }
@@ -428,17 +419,17 @@ void loop()
         else if (state == 12 && currentMillis - previousMachineMillis > 1500)
         {
             debug_println("State 12");
-            PiliServo.write(105); // open nuts hopper
+            PiliServo.write(PiliOpen); // open nuts hopper
             previousMachineMillis = currentMillis;
             state = 13;
         }
 
-        // State 13, Close nuts hopper after 0.5s
-        else if (state == 13 && currentMillis - previousMachineMillis > 2000)
+        // State 13, Close nuts hopper after 1.5s
+        else if (state == 13 && currentMillis - previousMachineMillis > 1500)
         {
             // close pili nuts hopper, drop it to pan
             debug_println("State 13");
-            PiliServo.write(0);
+            PiliServo.write(PiliClose);
             debug_println("Closing nuts hopper");
             previousMachineMillis = currentMillis;
             state = 16;
@@ -450,7 +441,7 @@ void loop()
             debug_println("resseting clock for boiling again");
             bookmarkTime = 0;
             timeleft = 0;
-            bookmarkTime = millis() + 120000; // set clocktime for 3 minutes. or 180000
+            bookmarkTime = millis() + 120000; // set clocktime for 2 minutes
             previousMachineMillis = currentMillis;
             state = 17;
         }
@@ -458,14 +449,14 @@ void loop()
         else if (state == 17 && currentMillis - previousMachineMillis > 50)
         {
             debug_println("State 17");
-            // during
             timeleft = bookmarkTime - millis();
             debug_println("boiling time left: " + String(timeleft / 1000));
             digitalWrite(stirrer_cc, HIGH);
+
             previousMachineMillis = currentMillis;
             if (timeleft <= 0)
             {
-                StoveServo.write(90);
+                StoveServo.write(StoveClose);
                 state = 18;
             }
         }
@@ -476,8 +467,8 @@ void loop()
             // make the stirrer up again
             debug_println("resseting clock for boiling again");
             bookmarkTime = 0;
-            timeleft = 0;                      // Set the temperature to low or 180 degrees
-            bookmarkTime = millis() + 4200000; // set clocktime for 1min 11 secc minutes. or 71000
+            timeleft = 0;                     // Set the temperature to low or 180 degrees
+            bookmarkTime = millis() + 300000; // set clocktime for 1min 11 secc minutes. or 71000
             previousMachineMillis = currentMillis;
             state = 19;
         }
@@ -538,7 +529,6 @@ void loop()
             debug_println(kawaliStepper.distanceToGo());
             debug_println(kawaliStepper.speed());
             previousMachineMillis = currentMillis;
-            machineOnStatus = false;
             state = 21;
         }
 
@@ -555,27 +545,6 @@ void loop()
 
             delay(10000);
             debug_println("finished for now");
-            previousMachineMillis = currentMillis;
-            state = 0;
-        }
-
-        else if (state == 22 && currentMillis - previousMachineMillis > 1000)
-        {
-            // send instruction to nano to reset all states
-            debug_println("State 22");
-            // Wire.beginTransmission(9); // Set slave address (0x70) or (9)
-            // Wire.write(startNano);     // Send character
-            // Wire.endTransmission();
-
-            debug_println("Instruction sent to Nano");
-            previousMachineMillis = currentMillis;
-            state = 23;
-        }
-
-        else if (state == 23 && currentMillis - previousMachineMillis > 500)
-        {
-            debug_println("State 23");
-            debug_println("reseting states, done");
             previousMachineMillis = currentMillis;
             state = 0;
         }
