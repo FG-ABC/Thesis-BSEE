@@ -46,7 +46,7 @@ unsigned long previousMachineMillis = 0;
 
 //--------------automation-------------
 // FG Set state here
-int state = 0; // stage of automation //original position and number is -1
+int state = -1; // stage of automation //original position and number is -1
 //-------------------------------
 
 //----------Servo Params------------------
@@ -122,8 +122,8 @@ AccelStepper twoStepper(AccelStepper::DRIVER, stpprTwostep, stpprTwodir);
 #define StoveClose 0
 #define PiliOpen 90
 #define PiliClose 0
-#define SugarOpen 0
-#define SugarClose 105
+#define SugarOpen 90
+#define SugarClose 180
 
 void setup()
 {
@@ -259,16 +259,11 @@ void loop()
             debug_println("State 0");
             StoveServo.write(StoveClose);
             HopperServo.write(HopperClose);
-            SugarServo.write(180);
+            SugarServo.write(SugarClose);
             PiliServo.write(0);
 
-            HopperServo.write(HopperOpen);
-            delay(3000);
-            HopperServo.write(HopperClose);
-            delay(3000);
-            twoStepper.move(360);
-            twoStepper.runToPosition();
-            delay(3000);
+            digitalWrite(stirrer_down, HIGH);
+            digitalWrite(stirrer_speed, HIGH);
         }
 
         // State 1, Running - HIGH, Stopped - LOW
@@ -396,7 +391,7 @@ void loop()
             debug_println("resseting clock");
             bookmarkTime = 0;
             timeleft = 0;
-            bookmarkTime = millis() + 180000; // set clocktime for 2 minutes. or 120000
+            bookmarkTime = millis() + 180000;
 
             previousMachineMillis = currentMillis;
             state = 11;
@@ -441,7 +436,7 @@ void loop()
             debug_println("resseting clock for boiling again");
             bookmarkTime = 0;
             timeleft = 0;
-            bookmarkTime = millis() + 120000; // set clocktime for 2 minutes
+            bookmarkTime = millis() + 120000;
             previousMachineMillis = currentMillis;
             state = 17;
         }
@@ -467,8 +462,8 @@ void loop()
             // make the stirrer up again
             debug_println("resseting clock for boiling again");
             bookmarkTime = 0;
-            timeleft = 0;                     // Set the temperature to low or 180 degrees
-            bookmarkTime = millis() + 300000; // set clocktime for 1min 11 secc minutes. or 71000
+            timeleft = 0;
+            bookmarkTime = millis() + 300000;
             previousMachineMillis = currentMillis;
             state = 19;
         }
@@ -485,6 +480,7 @@ void loop()
             {
                 digitalWrite(stirrer_cc, LOW);
                 digitalWrite(stirrer_up, HIGH); // off yung up
+                digitalWrite(stirrer_speed, HIGH);
                 state = 41;
             }
         }
@@ -495,8 +491,8 @@ void loop()
             // make the stirrer up again
             debug_println("resseting clock for boiling again");
             bookmarkTime = 0;
-            timeleft = 0;                      // Set the temperature to low or 180 degrees
-            bookmarkTime = millis() + 2300000; // set clocktime for 1min 11 secc minutes. or 71000
+            timeleft = 0; // Set the temperature to low or 180 degrees
+            bookmarkTime = millis() + 230000;
             previousMachineMillis = currentMillis;
             state = 42;
         }
@@ -512,7 +508,7 @@ void loop()
             if (timeleft <= 0)
             {
                 digitalWrite(stirrer_up, LOW);
-                state = 0;
+                state = 20;
             }
         }
 
@@ -546,7 +542,24 @@ void loop()
             delay(10000);
             debug_println("finished for now");
             previousMachineMillis = currentMillis;
-            state = 0;
+            state = 22;
+        }
+
+        else if (state == 22 && currentMillis - previousMachineMillis > 1000)
+        {
+            debug_println("State 0");
+            StoveServo.write(StoveClose);
+            HopperServo.write(HopperClose);
+            SugarServo.write(180);
+            PiliServo.write(0);
+
+            HopperServo.write(HopperOpen);
+            delay(3000);
+            HopperServo.write(HopperClose);
+            delay(3000);
+            twoStepper.move(360);
+            twoStepper.runToPosition();
+            delay(3000);
         }
 
         // *** SEQUENCES ***
