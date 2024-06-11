@@ -264,6 +264,8 @@ void loop()
 
             digitalWrite(stirrer_down, HIGH);
             digitalWrite(stirrer_speed, HIGH);
+            delay(170000);
+            state = -1;
         }
 
         // State 1, Running - HIGH, Stopped - LOW
@@ -391,7 +393,7 @@ void loop()
             debug_println("resseting clock");
             bookmarkTime = 0;
             timeleft = 0;
-            bookmarkTime = millis() + 180000;
+            bookmarkTime = millis() + 120000;
 
             previousMachineMillis = currentMillis;
             state = 11;
@@ -463,7 +465,7 @@ void loop()
             debug_println("resseting clock for boiling again");
             bookmarkTime = 0;
             timeleft = 0;
-            bookmarkTime = millis() + 300000;
+            bookmarkTime = millis() + 60000;
             previousMachineMillis = currentMillis;
             state = 19;
         }
@@ -539,7 +541,7 @@ void loop()
             kawaliStepper.moveTo(0);
             kawaliStepper.runToPosition();
 
-            delay(10000);
+            delay(5000);
             debug_println("finished for now");
             previousMachineMillis = currentMillis;
             state = 22;
@@ -560,6 +562,7 @@ void loop()
             twoStepper.move(360);
             twoStepper.runToPosition();
             delay(3000);
+            state = 0;
         }
 
         // *** SEQUENCES ***
